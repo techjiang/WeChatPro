@@ -1,0 +1,32 @@
+main:
+  push:
+    - name: check
+      docker:
+        image: node:24
+      stages:
+        - name: install
+          script: npm ci
+        - name: typecheck
+          script: npm run typecheck
+        - name: test
+          script: npm test
+        - name: build
+          script: npm run build
+        - name: verify-artifacts
+          script: |
+            node dist/cli.js check --config config.example.json > /dev/null
+            node dist/cli.js adapters
+            node dist/cli.js plugins
+  pull_request:
+    - name: check
+      docker:
+        image: node:24
+      stages:
+        - name: install
+          script: npm ci
+        - name: typecheck
+          script: npm run typecheck
+        - name: test
+          script: npm test
+        - name: build
+          script: npm run build

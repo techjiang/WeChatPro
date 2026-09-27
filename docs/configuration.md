@@ -1,0 +1,173 @@
+# 配置项详解
+
+配置为 JSON，可被环境变量覆盖部分字段。完整示例见 [`../config.example.json`](../config.example.json)。
+
+```bash
+node dist/cli.js check --config config.json   # 校验配置并打印解析结果
+```
+
+## 顶层
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `logLevel` | `trace`\|`debug`\|`info`\|`warn`\|`error`\|`fatal`\|`silent` | `info` | 日志级别 |
+| `storage` | object | — | 存储配置 |
+| `adapters` | array | `[]` | 协议适配器列表 |
+| `analytics` | object | — | 统计配置 |
+| `guard` | object | — | 风控配置 |
+| `ai` | object | — | AI 配置 |
+| `manage` | object | — | 信息管理配置 |
+| `api` | object | — | HTTP 控制台配置 |
+| `plugins` | array | `[]` | 各插件的私有配置 |
+
+## storage
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `sqlitePath` | `./data/wechatpro.db` | 数据库路径，`:memory:` 为纯内存 |
+| `wal` | `true` | 开启 WAL 提升并发读写 |
+
+## adapters
+
+```json
+{
+  "protocol": "http-webhook",
+  "enabled": true,
+  "options": { }
+}
+```
+
+`options` 由各适配器自行定义。
+
+### `http-webhook`
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `host` | `127.0.0.1` | 监听地址 |
+| `port` | `0`（随机） | 监听端口 |
+| `path` | `/webhook` | 接收路径 |
+| `token` | — | 校验 `x-wechatpro-token` 请求头，不匹配返回 401 |
+| `mapping` | 见下 | 字段映射：`{ 归一化字段: [候选路径…] }` |
+| `outboundUrl` | — | 回发消息的目标地址（不配则不支持主动发送） |
+
+默认字段映射（候选路径按序尝试）:
+
+| 归一化字段 | 默认候选 |
+| --- | --- |
+| `id` | `id`, `msgId`, `MsgId`, `messageId`, `msg_id`, `newMsgId` |
+| `conversationId` | `conversationId`, `roomId`, `chatId`, `groupId`, `FromUserName` |
+| `conversationName` | `conversationName`, `roomName`, `chatName`, `groupName` |
+| `conversationKind` | `conversationKind`, `chatType`, `roomType` |
+| `senderId` | `senderId`, `sender`, `fromUser`, `from`, `sender_id`, `FromUserName` |
+| `senderName` | `senderName`, `sender_nick`, `nickname`, `displayName`, `pushContent` |
+| `groupAlias` | `groupAlias`, `groupNickName`, `memberNickName` |
+| `ownerId` | `ownerId`, `roomOwner`, `owner` |
+| `memberCount` | `memberCount`, `memberCountInRoom` |
+| `kind` | `kind`, `type`, `msgType`, `MsgType`, `messageType` |
+| `text` | `text`, `content`, `msg`, `Content`, `message` |
+| `mentions` | `mentions`, `atList`, `atUsers`, `atuserlist` |
+| `quoteId` | `quoteId`, `replyTo`, `quoteMsgId` |
+| `mediaUrl` | `mediaUrl`, `url`, `fileUrl`, `cdnUrl` |
+| `timestamp` | `timestamp`, `createTime`, `CreateTime`, `ts`, `sendTime` |
+| `direction` | `direction`, `isSend`, `fromSelf` |
+
+自定义 `mapping` 会与默认值**合并**（同名键覆盖）。请求体可以是单个对象或对象数组（批量）。
+
+**消息类型兼容**：字符串枚举（`text`/`image`…）与数字（`1`→text、`3`→image、`34`→voice、
+`43`→video、`49`→link、`42`→card、`47`→sticker、`10000`→system、`10002`→revoke），
+以及常见别名（`pic`、`emoji`、`attachment`…）。无法识别归为 `unknown`，不丢数据。
+
+**时间戳兼容**：10 位秒级、13 位毫秒级、数字字符串、ISO 日期字符串。
+
+### `mock`
+
+用于演示与测试。`script` 为回放消息数组，`intervalMs` 为间隔，`loop` 控制是否循环。
+
+## analytics
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启用 |
+| `includeConversations` | `[]` | 参与统计的会话白名单，空为全部 |
+| `stopWords` | `[]` | 词频统计丢弃的停用词 |
+| `hourlyBuckets` | `24` | 时段桶粒度，24 表示按自然小时 |
+
+## guard
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启用检测 |
+| `alertThreshold` | `30` | 风险分达到该值产生告警 |
+| `windowMs` | `600000` | 滑动窗口长度（10 分钟） |
+| `rules` | `[]` | 规则配置，见 [`guard-rules.md`](./guard-rules.md) |
+
+单条规则配置：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `id` | 必填 | 内置规则 id；未匹配内置 id 时按「自定义词表规则」处理 |
+| `description` | `''` | 展示用说明 |
+| `enabled` | `true` | 是否启用 |
+| `action` | `alert` | `alert`\|`warn`\|`mute-suggest`\|`revoke-suggest`\|`kick-suggest` |
+| `weight` | `10` | 命中后计入的风险分 |
+| `options` | `{}` | 规则私有参数 |
+
+## ai
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `false` | 是否启用（关闭时摘要降级为统计口径） |
+| `provider` | `openai-compatible` | `openai-compatible`\|`mock` |
+| `baseUrl` | `https://api.openai.com/v1` | 任意兼容端点（DeepSeek、通义、Ollama…） |
+| `apiKey` | `''` | 鉴权密钥 |
+| `model` | `gpt-4o-mini` | 默认模型 |
+| `timeoutMs` | `30000` | 单次请求超时 |
+| `maxConcurrency` | `4` | 并发上限，防打爆上游限流 |
+| `summaryWindow` | `200` | 摘要覆盖的消息条数 |
+
+## manage
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启用 |
+| `dataDir` | `./data` | 数据目录 |
+| `retainMessagesPerConversation` | `0` | 单会话保留消息上限，`0` 为不限制 |
+
+> 留存裁剪只影响 `messages` 表；会话与成员的累计计数是历史口径，不随之回退。
+
+## api
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 是否启动控制台 |
+| `host` | `127.0.0.1` | 监听地址 |
+| `port` | `8787` | 监听端口 |
+| `token` | `''` | 访问令牌；为空则不鉴权 |
+| `corsOrigins` | `[]` | 允许的跨域来源 |
+
+> `host` 非回环地址且 `token` 为空时**引擎拒绝启动**。
+
+## plugins
+
+```json
+{ "name": "command", "enabled": true, "options": { } }
+```
+
+| 插件 | 关键 options |
+| --- | --- |
+| `command` | `prefix`（默认 `/`）、`aliases`（默认 `["机器人","bot","小助手"]`）、`bareCommands`（默认 `["help","帮助","菜单","指令"]`）、`replyOnUnknown`（默认 `true`） |
+| `guard` | `autoActions`（默认 `false`）、`actionTargets`、`useAi`（默认 `false`）、`aiPolicy` |
+| `analytics` | `digestCron`、`digestDays`、`reportConversationId` |
+| `ai` | `triggers`、`autoKnowledge`、`knowledgeMinChars` |
+
+## 环境变量覆盖
+
+| 变量 | 覆盖字段 |
+| --- | --- |
+| `WECHATPRO_LOG_LEVEL` | `logLevel` |
+| `WECHATPRO_SQLITE_PATH` | `storage.sqlitePath` |
+| `WECHATPRO_API_HOST` / `WECHATPRO_API_PORT` / `WECHATPRO_API_TOKEN` | `api.*` |
+| `WECHATPRO_AI_ENABLED` | `ai.enabled`（`true` 才开启） |
+| `WECHATPRO_AI_API_KEY` / `WECHATPRO_AI_BASE_URL` / `WECHATPRO_AI_MODEL` | `ai.*` |
+
+只覆盖「部署强相关」字段；业务规则仍走配置文件，避免配置散落两处。

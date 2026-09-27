@@ -1,0 +1,70 @@
+{
+  "logLevel": "info",
+  "storage": {
+    "sqlitePath": "./data/wechatpro.db",
+    "wal": true
+  },
+  "adapters": [
+    {
+      "protocol": "http-webhook",
+      "enabled": true,
+      "options": {
+        "host": "127.0.0.1",
+        "port": 8790,
+        "path": "/webhook",
+        "token": "change-me",
+        "outboundUrl": ""
+      }
+    }
+  ],
+  "analytics": {
+    "enabled": true,
+    "includeConversations": [],
+    "stopWords": ["哈哈", "收到", "好的", "嗯嗯", "谢谢"],
+    "hourlyBuckets": 24
+  },
+  "guard": {
+    "enabled": true,
+    "alertThreshold": 30,
+    "windowMs": 600000,
+    "rules": [
+      { "id": "keyword-blocklist", "enabled": true, "action": "alert", "weight": 40, "description": "命中敏感词", "options": { "words": ["刷单", "博彩", "赌球"] } },
+      { "id": "link-flood", "enabled": true, "action": "warn", "weight": 25, "description": "短时间重复发链接", "options": { "windowMs": 300000, "threshold": 3 } },
+      { "id": "burst-spam", "enabled": true, "action": "mute-suggest", "weight": 20, "description": "刷屏", "options": { "windowMs": 60000, "threshold": 10 } },
+      { "id": "duplicate-content", "enabled": true, "action": "warn", "weight": 15, "description": "重复内容", "options": { "windowMs": 600000, "threshold": 3 } },
+      { "id": "silent-hours", "enabled": true, "action": "alert", "weight": 10, "description": "深夜扰民", "options": { "startHour": 23, "endHour": 6, "minChars": 5 } },
+      { "id": "mention-storm", "enabled": true, "action": "warn", "weight": 30, "description": "@ 轰炸", "options": { "threshold": 5 } },
+      { "id": "contact-solicitation", "enabled": true, "action": "alert", "weight": 35, "description": "导流话术", "options": {} }
+    ]
+  },
+  "ai": {
+    "enabled": false,
+    "provider": "openai-compatible",
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKey": "",
+    "model": "gpt-4o-mini",
+    "timeoutMs": 30000,
+    "maxConcurrency": 4,
+    "summaryWindow": 200
+  },
+  "manage": {
+    "enabled": true,
+    "dataDir": "./data",
+    "retainMessagesPerConversation": 200000
+  },
+  "api": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "token": "",
+    "corsOrigins": []
+  },
+  "plugins": [
+    { "name": "command", "enabled": true, "options": { "prefix": "/", "aliases": ["机器人", "小助手"], "bareCommands": ["help", "帮助"] } },
+    { "name": "analytics", "enabled": true, "options": {} },
+    { "name": "guard", "enabled": true, "options": { "autoActions": false, "useAi": false } },
+    { "name": "ai", "enabled": true, "options": {} },
+    { "name": "manage", "enabled": true, "options": {} },
+    { "name": "rules-inspector", "enabled": true, "options": {} }
+  ]
+}

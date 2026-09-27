@@ -1,0 +1,32 @@
+{
+  "logLevel": "info",
+  "storage": { "sqlitePath": "./data/mapped.db" },
+  "adapters": [
+    {
+      "protocol": "http-webhook",
+      "enabled": true,
+      "options": {
+        "host": "127.0.0.1",
+        "port": 8790,
+        "path": "/webhook",
+        "token": "demo-token",
+        "mapping": {
+          "conversationId": ["roomId"],
+          "conversationName": ["roomTopic"],
+          "senderId": ["fromUser"],
+          "senderName": ["pushContent"],
+          "text": ["Content"],
+          "kind": ["MsgType"],
+          "timestamp": ["CreateTime"]
+        }
+      }
+    }
+  ],
+  "api": { "enabled": true, "host": "127.0.0.1", "port": 8787, "token": "" },
+  "plugins": [
+    { "name": "command", "enabled": true, "options": {} },
+    { "name": "analytics", "enabled": true, "options": {} },
+    { "name": "guard", "enabled": true, "options": {} },
+    { "name": "manage", "enabled": true, "options": {} }
+  ]
+}

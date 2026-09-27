@@ -1,0 +1,45 @@
+{
+  "logLevel": "info",
+  "storage": { "sqlitePath": "./data/demo.db" },
+  "adapters": [
+    {
+      "protocol": "mock",
+      "enabled": true,
+      "options": {
+        "intervalMs": 700,
+        "loop": true,
+        "script": [
+          { "conversationId": "demo-group@chatroom", "conversationName": "产品交流群", "senderId": "u1", "senderName": "张工", "text": "本周项目进度同步一下，后端接口完成 80%", "MsgType": 1 },
+          { "conversationId": "demo-group@chatroom", "conversationName": "产品交流群", "senderId": "u2", "senderName": "李设计", "text": "设计稿已经交付，大家看下有没有问题", "MsgType": 1 },
+          { "conversationId": "demo-group@chatroom", "conversationName": "产品交流群", "senderId": "u3", "senderName": "王产品", "text": "团建定在周五下午三点，地点还在选", "MsgType": 1 },
+          { "conversationId": "demo-group@chatroom", "conversationName": "产品交流群", "senderId": "u1", "senderName": "张工", "text": "规则：需求变更需要提前一天同步到群里", "MsgType": 1 },
+          { "conversationId": "demo-group@chatroom", "conversationName": "产品交流群", "senderId": "u9", "senderName": "广告号", "text": "招人刷单日结，需要的加我微信私聊", "MsgType": 1 },
+          { "conversationId": "demo-group@chatroom", "conversationName": "产品交流群", "senderId": "u2", "senderName": "李设计", "text": "收到，我来跟一下设计侧的资源", "MsgType": 1 }
+        ]
+      }
+    }
+  ],
+  "analytics": { "enabled": true, "stopWords": ["收到", "好的", "嗯嗯"], "hourlyBuckets": 24 },
+  "guard": {
+    "enabled": true,
+    "alertThreshold": 30,
+    "windowMs": 600000,
+    "rules": [
+      { "id": "keyword-blocklist", "enabled": true, "weight": 40, "description": "命中敏感词", "options": { "words": ["刷单", "博彩"] } },
+      { "id": "contact-solicitation", "enabled": true, "weight": 35, "description": "导流话术", "options": {} },
+      { "id": "link-flood", "enabled": true, "weight": 25, "options": { "windowMs": 300000, "threshold": 3 } },
+      { "id": "burst-spam", "enabled": true, "weight": 20, "options": { "windowMs": 60000, "threshold": 10 } }
+    ]
+  },
+  "ai": { "enabled": false },
+  "manage": { "enabled": true, "retainMessagesPerConversation": 0 },
+  "api": { "enabled": true, "host": "127.0.0.1", "port": 8787, "token": "" },
+  "plugins": [
+    { "name": "command", "enabled": true, "options": {} },
+    { "name": "analytics", "enabled": true, "options": {} },
+    { "name": "guard", "enabled": true, "options": { "autoActions": false } },
+    { "name": "ai", "enabled": true, "options": {} },
+    { "name": "manage", "enabled": true, "options": {} },
+    { "name": "rules-inspector", "enabled": true, "options": {} }
+  ]
+}

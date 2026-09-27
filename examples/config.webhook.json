@@ -1,0 +1,37 @@
+{
+  "logLevel": "info",
+  "storage": { "sqlitePath": "./data/webhook.db" },
+  "adapters": [
+    {
+      "protocol": "http-webhook",
+      "enabled": true,
+      "options": {
+        "host": "127.0.0.1",
+        "port": 8790,
+        "path": "/webhook",
+        "token": "demo-token"
+      }
+    }
+  ],
+  "analytics": { "enabled": true },
+  "guard": {
+    "enabled": true,
+    "alertThreshold": 30,
+    "windowMs": 600000,
+    "rules": [
+      { "id": "keyword-blocklist", "enabled": true, "weight": 40, "options": { "words": ["刷单", "博彩"] } },
+      { "id": "contact-solicitation", "enabled": true, "weight": 35, "options": {} }
+    ]
+  },
+  "ai": { "enabled": false },
+  "manage": { "enabled": true },
+  "api": { "enabled": true, "host": "127.0.0.1", "port": 8787, "token": "" },
+  "plugins": [
+    { "name": "command", "enabled": true, "options": {} },
+    { "name": "analytics", "enabled": true, "options": {} },
+    { "name": "guard", "enabled": true, "options": {} },
+    { "name": "ai", "enabled": true, "options": {} },
+    { "name": "manage", "enabled": true, "options": {} },
+    { "name": "rules-inspector", "enabled": true, "options": {} }
+  ]
+}
