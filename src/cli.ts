@@ -15,6 +15,7 @@ import { createClientHost, bridgeFromShell, type ClientShellApi } from './client
 import { renderPanel } from './client/panel.js';
 import { parseChatExport, WECHAT_PC_MAPPING } from './protocols/host.js';
 import { BRAND, asciiBanner, brandIcon } from './client/brand.js';
+import { disclaimerText, shortDisclaimer } from './legal/disclaimer.js';
 
 /**
  * 命令行入口。
@@ -22,6 +23,21 @@ import { BRAND, asciiBanner, brandIcon } from './client/brand.js';
  * 只做「运维与排查」类操作：启动服务、看报表、导出数据。
  * 业务动作（回复、处罚）不放 CLI——它们需要审计与权限，应该走 API。
  */
+
+/**
+ * 启动时的风险提示块。
+ *
+ * 每次启动都打印——这不是「啰嗦」，而是因为插件会被装到别人机器上：
+ * 使用者往往只看到一条启动命令，看不到 README。把「可能导致账号被封禁」
+ * 放在横幅里，是唯一能保证他一定看到的位置。
+ */
+function riskBanner(): string {
+  return (
+    '⚠️  高风险提示：本项目会读取微信聊天内容，可能导致微信账号被限制或封禁；\n' +
+    '    仅供学习研究，按「现状」提供，作者不承担任何责任。\n' +
+    '    完整声明：wechatpro disclaimer ｜ https://cnb.cool/asoe/TechSauce/WeChatPro\n'
+  );
+}
 
 const USAGE = `WeChatPro — 微信社群智能引擎（PC 客户端内直接使用与管理）
 
@@ -40,6 +56,7 @@ const USAGE = `WeChatPro — 微信社群智能引擎（PC 客户端内直接使
   wechatpro adapters                             列出已注册的协议适配器
   wechatpro plugins                              列出内置插件
   wechatpro brand                                输出品牌信息与资源路径
+  wechatpro disclaimer [--json]                  输出完整免责声明与风险提示
   wechatpro check [--config <path>]              校验配置并打印解析结果
   wechatpro export <conversationId> [--out f]    导出群档案 JSON
 
@@ -75,6 +92,8 @@ async function main(argv: string[]): Promise<number> {
       return importCommand(flags);
     case 'brand':
       return brandCommand(flags);
+    case 'disclaimer':
+      return disclaimerCommand(flags);
     case 'report':
       return reportCommand(flags);
     case 'digest':
@@ -152,9 +171,15 @@ async function startCommand(flags: Flags): Promise<number> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   engine.logger.info(
-    { adapters: engine.stats.adapters, api: config.api.enabled ? `${config.api.host}:${config.api.port}` : 'off' },
+    {
+      adapters: engine.stats.adapters,
+      api: config.api.enabled ? `${config.api.host}:${config.api.port}` : 'off',
+      disclaimer: shortDisclaimer(),
+    },
     'WeChatPro 已就绪',
   );
+  // 控制台也打一遍：`server` 类命令的执行者常常不看结构化日志。
+  if (process.stdout.isTTY) process.stdout.write(riskBanner());
   return 0;
 }
 
@@ -196,11 +221,13 @@ async function clientCommand(flags: Flags): Promise<number> {
       capabilities: client?.capabilities(),
       adapters: engine.stats.adapters,
       panel: `http://${config.api.host}:${config.api.port}/`,
+      disclaimer: shortDisclaimer(),
     },
     `\n${banner}\n客户端插件已就绪`,
   );
   process.stdout.write(
     `${banner}\n\n` +
+      riskBanner() + '\n' +
       `宿主      : ${client?.host ?? 'none'}\n` +
       `能力      : ${(client?.capabilities() ?? []).join(', ') || '（无，已降级）'}\n` +
       `面板      : http://${config.api.host}:${config.api.port}/\n` +
@@ -550,6 +577,23 @@ async function brandCommand(flags: Flags): Promise<number> {
   }
   process.stdout.write(`Logo      : ${icon ? '已装载（内联可用）' : '缺失（brand/logo-256.png）'}\n`);
   process.stdout.write(`图标资源  : brand/icons/（16/24/32/48/64/128/256 + ICO）\n`);
+  return 0;
+}
+
+/**
+ * 输出免责声明。
+ *
+ * 存在的意义不是「文档里也有一份」——而是让人**不必打开 README** 就能在装之前
+ * 看到完整条款，并且给发布流程一个可机读的入口（`--json`）。
+ * 声明文本的单一事实源见 src/legal/disclaimer.ts。
+ */
+async function disclaimerCommand(flags: Flags): Promise<number> {
+  if (flags.json) {
+    const { disclaimerPayload } = await import('./legal/disclaimer.js');
+    process.stdout.write(JSON.stringify(disclaimerPayload(), null, 2) + '\n');
+    return 0;
+  }
+  process.stdout.write(disclaimerText() + '\n');
   return 0;
 }
 

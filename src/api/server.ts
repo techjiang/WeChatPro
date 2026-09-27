@@ -5,6 +5,7 @@ import { GroupManager } from '../manage/index.js';
 import { renderReport } from '../plugins/analytics.js';
 import { renderPanel } from '../client/panel.js';
 import { BRAND, brandIcon } from '../client/brand.js';
+import { disclaimerPayload } from '../legal/disclaimer.js';
 import type { AppConfig } from '../core/config.js';
 import type { Engine } from '../runtime/engine.js';
 import type { AiService } from '../ai/index.js';
@@ -361,6 +362,16 @@ export function buildServer(options: ApiServerOptions): FastifyInstance {
       brand: BRAND,
     };
   });
+
+  /**
+   * 免责声明与风险提示。
+   *
+   * 面板「关于」页从这里取文本，而不是把声明硬编码进面板 JS：
+   * 声明是法律文本，只能有一份事实源（`src/legal/disclaimer.ts`），
+   * 否则改了模块忘了面板，就会出现「面板上写的那句话还没生效」这类问题。
+   * 同时给 CLI / 脚本一个可机读的入口（发 Release、做合规检查都用得上）。
+   */
+  app.get('/api/disclaimer', async () => disclaimerPayload());
 
   /**
    * 宿主注入入口（HTTP 形态）。

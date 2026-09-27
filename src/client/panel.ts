@@ -117,6 +117,14 @@ export function renderPanel(options: PanelOptions = {}): string {
   .muted { color:var(--muted); font-size:12px; }
   .err { color:var(--danger); font-size:12px; }
   .ok { color:var(--good); }
+  .legal { border:1px solid rgba(255,107,107,.4); background:rgba(255,107,107,.07); border-radius:10px; padding:12px 14px; }
+  .legal h2 { color:var(--danger); }
+  .legal ol, .legal ul { margin:8px 0 0; padding-left:18px; font-size:12px; line-height:1.75; color:var(--ice); }
+  .legal li { margin-bottom:5px; }
+  .legal .sec { margin-top:12px; }
+  .legal .sec > .t { font-size:12px; font-weight:600; color:var(--cyan); margin-bottom:2px; }
+  .legal strong { color:#fff; }
+  .legal .tail { margin-top:12px; font-size:12px; color:var(--muted); }
   .kv { display:grid; grid-template-columns:88px 1fr; gap:4px 10px; font-size:12px; }
   .kv .k { color:var(--muted); }
   .toast { position:fixed; right:14px; bottom:14px; background:rgba(15,36,64,.96); border:1px solid var(--line);
@@ -687,8 +695,43 @@ RENDERERS.health = function () {
   });
 };
 
+/**
+ * 免责声明区块。
+ *
+ * 文本从引擎接口取（/api/disclaimer），不在面板里硬编码一份：声明是法律文本，
+ * 只能有一个事实源（见 src/legal/disclaimer.ts）。取不到时明确说「未能从引擎读取」，
+ * 而不是静默省略 —— 让人以为「这项目好像没有声明」比展示失败更糟。
+ */
+function renderDisclaimer() {
+  if (DISCLAIMER) return disclaimerHtml(DISCLAIMER);
+  return '<div class="panel legal"><h2>⚠️ 免责声明与风险提示（高风险）</h2>' +
+    '<p class="err">未能从引擎读取声明文本，请直接查看仓库根目录的 README。</p>' +
+    '<p class="muted">作者与项目按「现状」提供，因使用或无法使用本项目产生的一切后果由使用者自行承担。</p></div>';
+}
+
+/** 把结构化声明拼成 HTML。文本里的粗体标记在这里转成 strong 标签。 */
+function disclaimerHtml(d) {
+  var html = '<div class="panel legal"><h2>⚠️ ' + esc(d.risk.label) + ' · 免责声明与风险提示</h2>' +
+    '<p class="err" style="font-size:12px">' + md(d.risk.summary) + '</p><ol>';
+  (d.notice || []).forEach(function (line) { html += '<li>' + md(line) + '</li>'; });
+  html += '</ol>';
+  (d.sections || []).forEach(function (sec) {
+    html += '<div class="sec"><div class="t">' + esc(sec.title) + '</div><ul>';
+    (sec.items || []).forEach(function (line) { html += '<li>' + md(line) + '</li>'; });
+    html += '</ul></div>';
+  });
+  html += '<p class="tail">以上为完整声明。若你不同意其中任何一条，请立即停止使用并删除本项目。</p></div>';
+  return html;
+}
+
+/** 只放行粗体标记：声明文本里没有别的 Markdown 语法，不需要引入解析器。 */
+function md(text) {
+  return esc(text).replace(/[*][*]([^*]+)[*][*]/g, '<strong>$1</strong>');
+}
+
 RENDERERS.about = function () {
   var html = header('关于', BRAND_NAME + ' · ' + BRAND_TAGLINE);
+  html += renderDisclaimer();
   html += '<div class="panel"><h2>项目</h2><div class="kv">' +
     kv('名称', BRAND_NAME) + kv('定位', '微信社群智能引擎 · PC 客户端内直接使用与管理') +
     kv('作者', BRAND_AUTHOR) + kv('许可', BRAND_LICENSE) +
@@ -726,6 +769,8 @@ var BRAND_FORUM = ${JSON.stringify(BRAND.forum)};
 var BRAND_QQ = ${JSON.stringify(BRAND.qqGroups)};
 var BRAND_LICENSE = ${JSON.stringify(BRAND.license)};
 var HOST_CAPS = [];
+/* 免责声明文本，启动时从 /api/disclaimer 拉一次（内容固定，不必每次进「关于」页都请求）。 */
+var DISCLAIMER = null;
 
 /* ── 宿主握手 ──────────────────────────────────────────────── */
 function initHost() {
@@ -741,6 +786,9 @@ function initHost() {
 function boot() {
   initHost();
   renderNav();
+  // 声明文本先拉，不阻塞主渲染：取不到也只是「关于」页少一块，
+  // 而引擎连不上时面板本来就要走错误分支。
+  api('/api/disclaimer').then(function (d) { DISCLAIMER = d; }).catch(function () { DISCLAIMER = null; });
   api('/health').then(function (health) {
     document.getElementById('health').innerHTML = '已接入 <b>' + health.conversations + '</b> 个会话 · 接收 <b>' +
       n(health.stats.accepted) + '</b> 条 · AI ' + (health.aiEnabled ? '已启用' : '未启用');

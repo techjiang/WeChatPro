@@ -46,6 +46,11 @@ main:
           # 「面板错位」「点进去是未知视图」这类问题只在浏览器里肉眼可见，
           # 而 CI 里没人盯——所以把契约固化成断言。
           script: node scripts/verify-dashboard.mjs
+        - name: verify-disclaimer
+          # 免责声明必须在 README / 面板 / CLI / API 四个出口都出现。
+          # 它失效的方式不是写错而是被删掉：某次「文案精简」顺手删掉一段，
+          # 没有任何测试会红，等真出事才发现当时已经没声明了。
+          script: node scripts/verify-disclaimer.mjs /tmp/panel.html
   pull_request:
     - name: check
       docker:
@@ -74,3 +79,5 @@ main:
           script: node scripts/verify-digest.mjs
         - name: verify-dashboard
           script: node scripts/verify-dashboard.mjs
+        - name: verify-disclaimer
+          script: node scripts/verify-disclaimer.mjs /tmp/panel.html

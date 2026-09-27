@@ -66,6 +66,19 @@ export { createClientHost, bridgeFromShell } from './client/host.js';
 export type { ClientHost, ClientHostOptions, ClientShellApi } from './client/host.js';
 export { renderPanel } from './client/panel.js';
 export { BRAND, BRAND_COLORS, brandIcon, asciiBanner } from './client/brand.js';
+
+/* ── 免责声明与风险提示 ───────────────────────────────────── */
+// 导出是为了让宿主插件壳 / 分发方能在自己的界面上展示同一份声明，
+// 而不是各自抄一份措辞不同的版本——法律文本只能有一个事实源。
+export {
+  RISK_LEVEL,
+  RISK_NOTICE,
+  DISCLAIMER_SECTIONS,
+  shortDisclaimer,
+  disclaimerText,
+  disclaimerPayload,
+} from './legal/disclaimer.js';
+export type { DisclaimerSection } from './legal/disclaimer.js';
 export { createClientPlugin } from './plugins/client.js';
 
 export { AnalyticsEngine, topWordsOf, lastDays, DAY_MS, HOUR_MS } from './analytics/index.js';

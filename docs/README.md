@@ -2,6 +2,7 @@
 
 | 文档 | 读它来解决什么 |
 |---|---|
+| [disclaimer.md](./disclaimer.md) | **免责声明与风险提示**：账号封禁风险、作者与使用者责任、数据与合规、常见问题 —— 装之前先读 |
 | [pc-client.md](./pc-client.md) | **在微信 PC 客户端内使用与管理**：快速开始、三种注入路径、字段映射、宿主能力降级、排障 |
 | [architecture.md](./architecture.md) | 架构分层与关键设计取舍：为什么用预聚合、为什么默认不自动处罚、为什么不上向量库 |
 | [configuration.md](./configuration.md) | 配置项逐条说明与默认值 |
@@ -26,3 +27,4 @@
 | 调风控阈值 | [guard-rules.md](./guard-rules.md) |
 | 日报几点发、发给谁、某天没收到 | [digest.md](./digest.md) |
 | 数据放哪、怎么备份 | [deployment.md](./deployment.md) |
+| 用了会不会封号、出事谁负责 | [disclaimer.md](./disclaimer.md) |

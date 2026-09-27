@@ -35,6 +35,7 @@
     "clean": "rm -rf dist coverage",
     "brand:assets": "tsx scripts/brand-assets.ts brand/logo-source.png",
     "verify:panel": "node scripts/verify-panel.mjs /tmp/panel.html",
+    "verify:disclaimer": "node scripts/verify-disclaimer.mjs /tmp/panel.html",
     "verify:client": "node scripts/smoke-client.mjs",
     "ci": "npm run typecheck && npm test && npm run build"
   },

@@ -327,6 +327,34 @@ describe('客户端形态 API', () => {
     expect(body.brand.website).toBe('https://docs.asoe.cn');
   });
 
+  /**
+   * 面板从接口取声明文本，所以这个接口不能只是「有」，还要能真的被渲染出来。
+   * 断言覆盖「接口有内容」+「面板会在关于页请求它」两段：
+   * 只测接口的话，面板哪天不请求了也照样绿。
+   */
+  it('/api/disclaimer 提供完整免责声明，字段可被面板直接渲染', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/disclaimer' });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.risk.level).toBe('high');
+    expect(body.notice.length).toBeGreaterThan(0);
+    expect(body.sections.map((s: { title: string }) => s.title)).toContain('作者责任');
+    expect(body.short).toMatch(/不承担任何责任/);
+    // 面板渲染依赖这三个字段：少了任何一个，关于页会渲染成空白区块。
+    for (const section of body.sections) {
+      expect(typeof section.title).toBe('string');
+      expect(Array.isArray(section.items)).toBe(true);
+      expect(section.items.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('面板在关于页请求 /api/disclaimer，且不自己硬编码声明文本', () => {
+    const html = renderPanel();
+    expect(html).toContain("api('/api/disclaimer')");
+    expect(html).toContain('renderDisclaimer');
+    expect(html).not.toContain('适销性');
+  });
+
   it('接受微信原生字段的注入，并返回结构化结果', async () => {
     const response = await app.inject({
       method: 'POST',
