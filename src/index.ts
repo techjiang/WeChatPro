@@ -34,7 +34,7 @@ export type {
 } from './core/types.js';
 
 export { registerAdapter, listAdapterProtocols, pick, toMillis } from './core/registry.js';
-export { registerBuiltinAdapters } from './protocols/index.js';
+export { registerBuiltinAdapters, setHostProvider } from './protocols/index.js';
 export {
   buildMockAdapter,
   buildWebhookAdapter,

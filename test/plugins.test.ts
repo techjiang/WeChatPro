@@ -279,4 +279,74 @@ describe('端到端：消息 → 统计 → 风控 → 指令', () => {
     engine.sendMessage = sendMessage;
     expect(sent).toContain(HELP_TEXT);
   });
+
+  /**
+   * 回归：同一个进程里第二次 `bootstrap()` 也必须能收到宿主注入的消息。
+   *
+   * 曾经的实现把第一次的 `hostFactory` 永久留在全局注册表里（`registerBuiltinAdapters`
+   * 的 `if (!existing.has('host'))`），于是第二次起的 `ClientHost` 拿到的是
+   * 只认第一个宿主的适配器，`inject()` 恒返回 `transport-off`。
+   * 现象极其隐蔽：**日志一切正常，消息全丢**。宿主热重载、同进程多次启停、
+   * 并行测试都会踩到。之前的测试用「所有用例共用一个 ClientHost」绕开了它，
+   * 所以这条用例刻意建**两个**宿主来钉死。
+   */
+  it('同进程第二次 bootstrap 仍能收到宿主注入的消息', async () => {
+    const clientConfig = () =>
+      testConfig({
+        api: { enabled: false },
+        client: { enabled: true },
+        plugins: [{ name: 'command', enabled: true, options: {} }],
+      });
+
+    const payload = {
+      MsgSvrID: 'regress-1',
+      StrTalker: 'g@chatroom',
+      RoomName: '回归群',
+      StrSender: 'wxid_a',
+      SenderNick: '甲',
+      StrContent: '本周进度同步',
+      Type: 1,
+      CreateTime: 1_790_000_000,
+    };
+
+    for (const round of [1, 2, 3]) {
+      const first = await bootstrap({ clientMode: true, config: clientConfig() });
+      await first.start();
+      const result = await first.client!.ingest(payload);
+      await first.stop();
+
+      expect(result.accepted, `第 ${round} 次 bootstrap 的消息被丢弃`).toBe(true);
+      expect(result.reason).toBeUndefined();
+    }
+  });
+
+  it('旧 hostFactory 入口同样每次 bootstrap 生效', async () => {
+    const { createClientHost } = await import('../src/client/host.js');
+    const { registerBuiltinAdapters } = await import('../src/protocols/index.js');
+
+    for (const round of [1, 2]) {
+      const host = createClientHost({ host: 'wechat-pc' });
+      registerBuiltinAdapters({ hostGateway: host.gateway, hostFactory: async () => host.adapter });
+
+      const config = testConfig({
+        api: { enabled: false },
+        client: { enabled: true },
+        plugins: [{ name: 'command', enabled: true, options: {} }],
+      });
+      const built = await bootstrap({ clientMode: true, config });
+      await built.start();
+      const result = await built.client!.ingest({
+        MsgSvrID: `legacy-${round}`,
+        StrTalker: 'g@chatroom',
+        RoomName: '回归群',
+        StrSender: 'wxid_a',
+        SenderNick: '甲',
+        StrContent: 'hello',
+        Type: 1,
+        CreateTime: 1_790_000_000,
+      });
+      await built.stop();
+      expect(result.accepted, `旧入口第 ${round} 次失败`).toBe(true);
+    }
+  });
 });

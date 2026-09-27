@@ -95,10 +95,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       })
     : undefined;
 
+  // `hostProvider` 每次 bootstrap 都重新传入：注册表是全局的，而宿主实例是每份插件一份。
+  // 只在首次生效的话，第二个客户端形态会拿到第一个宿主的适配器，注入静默失效。
   registerBuiltinAdapters(
-    host
-      ? { hostGateway: host.gateway, hostFactory: async () => host.adapter }
-      : {},
+    host ? { hostGateway: host.gateway, hostProvider: () => host.adapter } : {},
   );
   const client = host;
 

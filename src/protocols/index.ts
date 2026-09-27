@@ -37,26 +37,83 @@ export interface RegisterBuiltinOptions {
   /** 宿主桥实现；与 `hostGateway` 同时给出时，构造 `host` 适配器即挂载。 */
   hostBridge?: import('../core/host-bridge.js').HostBridge;
   /**
-   * 宿主适配器工厂。
+   * 当前宿主适配器提供方。
    *
-   * 客户端形态必须传入，且**每次返回同一个实例**（由 `createClientHost` 保证）。
-   * 原因：消息入口 `inject()` 与引擎绑定的是同一个 `HostTransport`，
-   * 工厂若每次新建实例，宿主注入的消息会落到一个没有订阅者的 transport 上，
-   * 表现为「日志正常、消息全丢」。
+   * 每次 `bootstrap()` 都会传入新的提供方，`host` 分发器在造适配器时读取它——
+   * 这是「一个进程能安全地起多次客户端形态」的关键。
+   */
+  hostProvider?: () => ReturnType<typeof createHostAdapter>;
+  /**
+   * 宿主适配器工厂（旧入口，保留兼容）。
+   *
+   * 语义等价于 `hostProvider: () => hostFactory(...)`，但**每次调用本函数都会生效**，
+   * 与 `hostProvider` 一致。新代码请优先用 `hostProvider`。
+   *
+   * 注意：工厂必须**每次返回同一个实例**（由 `createClientHost` 保证）。
+   * 消息入口 `inject()` 与引擎绑定的是同一个 `HostTransport`，工厂若每次新建实例，
+   * 宿主注入的消息会落到没有订阅者的 transport 上，表现为「日志正常、消息全丢」。
    */
   hostFactory?: AdapterFactory;
 }
 
 /** 注册内置适配器。由 `bootstrap()` 调用一次，避免模块导入副作用。 */
 /**
+ * 当前活跃的客户端宿主提供方。
+ *
+ * 之所以需要这一层间接：适配器注册表是**模块级全局**（`registerAdapter` 会拒绝同名覆盖），
+ * 而客户端形态下「一个进程一份插件」——宿主实例必须跟着 `bootstrap()` 走。
+ * 如果首次注册就把 `hostFactory` 钉死，第二次 `bootstrap()` 建出的 `ClientHost`
+ * 会持有一个只认第一个 host 的适配器，`inject()` 永远返回 `transport-off`：
+ * **消息全丢，但日志一切正常**。宿主热重载、同进程多次启停、并行测试都会踩到。
+ */
+let hostProvider: (() => ReturnType<typeof createHostAdapter>) | null = null;
+
+/** 旧入口 `hostFactory` 的留存位；同样每次 `registerBuiltinAdapters()` 都会被刷新。 */
+let legacyHostFactory: AdapterFactory | null = null;
+
+/**
+ * 注册（或替换）客户端宿主提供方。
+ *
+ * 由 `bootstrap()` 在客户端形态下调用。传 `null` 表示退出客户端形态。
+ * 与 `registerBuiltinAdapters()` 相比，这里**每次调用都生效**，不做首次冻结。
+ */
+export function setHostProvider(
+  provider: (() => ReturnType<typeof createHostAdapter>) | null,
+  gateway?: HostGateway,
+  bridge?: import('../core/host-bridge.js').HostBridge,
+): void {
+  hostProvider = provider;
+  if (gateway) {
+    if (bridge) gateway.attach(bridge);
+    setHostGateway(gateway);
+  }
+}
+
+/** 宿主反向调用桥。引擎与面板的「往客户端写字」动作都经它。 */
+let hostGateway: HostGateway | undefined;
+
+function setHostGateway(gateway: HostGateway): void {
+  hostGateway = gateway;
+}
+
+/**
  * 幂等注册。
  *
  * `registerAdapter` 对同名协议会抛错（防止悄悄覆盖），但 bootstrap 在
- * 「检测到客户端形态」与「常规启动」两处都会调用本函数，测试里更是每个用例都调。
- * 所以这里先查已注册列表，已存在就跳过——配置 `hostFactory` 时也只在首次生效，
- * 避免第二次注册被忽略后宿主实例与引擎实例脱钩。
+ * 「检测到客户端形态」与「常规启动」两处都会调用本函数，测试里更是每个用例都调，
+ * 所以这里先查已注册列表，已存在就跳过。
+ *
+ * `host` 协议注册的是一个**分发器**而不是具体实例：真正用哪个宿主由
+ * `setHostProvider()` 决定，因此后续 `bootstrap()` 能安全地替换它。
+ * 直接把 `options.hostFactory` 注册成工厂是不行的——那样第二次起的宿主
+ * 与引擎会脱钩（见 `setHostProvider` 注释）。
  */
 export function registerBuiltinAdapters(options: RegisterBuiltinOptions = {}): void {
+  if (options.hostProvider) hostProvider = options.hostProvider;
+  // 兼容旧入口 `hostFactory`：同样每次生效，避免又一次「首次冻结」。
+  if (options.hostFactory) legacyHostFactory = options.hostFactory;
+  if (options.hostGateway) setHostGateway(options.hostGateway);
+
   const existing = new Set(listAdapterProtocols());
   if (!existing.has('mock')) {
     registerAdapter('mock', (async (raw) => buildMockAdapter(raw as MockAdapterOptions)) as AdapterFactory);
@@ -68,10 +125,14 @@ export function registerBuiltinAdapters(options: RegisterBuiltinOptions = {}): v
     );
   }
   if (!existing.has('host')) {
-    const factory: AdapterFactory =
-      options.hostFactory ??
-      ((async (raw) =>
-        createHostAdapter(raw as HostAdapterOptions, options.hostGateway, options.hostBridge)) as AdapterFactory);
+    // 分发器：延迟到真正造适配器时才读当前 provider，
+    // 这样「先注册、后 bootstrap」与「多次 bootstrap」都能指向正确的宿主。
+    const factory: AdapterFactory = async (raw, deps) => {
+      const active = hostProvider?.();
+      if (active) return active;
+      if (legacyHostFactory) return legacyHostFactory(raw, deps);
+      return createHostAdapter(raw as HostAdapterOptions, hostGateway, options.hostBridge);
+    };
     registerAdapter('host', factory);
   }
 }
