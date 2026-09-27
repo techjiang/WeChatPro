@@ -4,7 +4,7 @@ import { EventBus } from '../src/core/events.js';
 import { resolvePluginOrder, PluginGraphError, type Plugin } from '../src/core/plugin.js';
 import { registerAdapter, normalizeEventType, pick, toMillis, listAdapterProtocols } from '../src/core/registry.js';
 import { resolveConversationKind } from '../src/runtime/engine.js';
-import { registerBuiltinAdapters, coerceKind } from '../src/protocols.js';
+import { registerBuiltinAdapters, coerceKind } from '../src/protocols/index.js';
 import { createTestEngine, testConfig } from './helpers.js';
 import type { RawEvent } from '../src/core/types.js';
 

@@ -1,9 +1,9 @@
 {
   "name": "wechatpro",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "WeChatPro — 专业微信 AI 助手 / 群聊统计 / 自动化检测 / 群聊信息管理一体化引擎",
+  "description": "WeChatPro — 微信 PC 客户端插件：群聊统计 / 自动化检测 / 群聊信息管理 / AI 助手一体化引擎",
   "license": "MIT",
   "engines": {
     "node": ">=22"
@@ -21,6 +21,7 @@
   },
   "files": [
     "dist",
+    "brand",
     "config.example.json",
     "README.md"
   ],
@@ -31,7 +32,11 @@
     "start": "node dist/cli.js start --config config.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf dist coverage"
+    "clean": "rm -rf dist coverage",
+    "brand:assets": "tsx scripts/brand-assets.ts brand/logo.png",
+    "verify:panel": "node scripts/verify-panel.mjs /tmp/panel.html",
+    "verify:client": "node scripts/smoke-client.mjs",
+    "ci": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
@@ -49,5 +54,21 @@
   },
   "allowScripts": {
     "esbuild@0.28.2": true
-  }
+  },
+  "author": "科技酱 <https://docs.asoe.cn>",
+  "homepage": "https://docs.asoe.cn",
+  "repository": {
+    "type": "git",
+    "url": "https://cnb.cool/asoe/TechSauce/WeChatPro.git"
+  },
+  "keywords": [
+    "wechat",
+    "wechat-pc",
+    "plugin",
+    "group-analytics",
+    "moderation",
+    "ai",
+    "chatbot",
+    "社群运营"
+  ]
 }

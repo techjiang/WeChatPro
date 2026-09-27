@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { registerAdapter, listAdapterProtocols, normalizeEventType, pick, toMillis } from './core/registry.js';
-import type { ProtocolAdapter, RawEvent, RawEventHandler, OutboundMessage } from './core/types.js';
+import { normalizeEventType, pick, toMillis } from '../core/registry.js';
+import type { ProtocolAdapter, RawEventHandler, OutboundMessage } from '../core/types.js';
 
 /**
  * 内置协议适配器。
@@ -58,7 +58,7 @@ function coerceKind(raw: unknown): string {
   return aliases[value] ?? 'unknown';
 }
 
-interface MockAdapterOptions {
+export interface MockAdapterOptions {
   /** 回放脚本：按 `intervalMs` 逐条投递。 */
   script?: Array<Partial<Record<string, unknown>>>;
   intervalMs?: number;
@@ -66,7 +66,7 @@ interface MockAdapterOptions {
   loop?: boolean;
 }
 
-function buildMockAdapter(options: MockAdapterOptions): ProtocolAdapter {
+export function buildMockAdapter(options: MockAdapterOptions): ProtocolAdapter {
   let timer: NodeJS.Timeout | null = null;
   let stopped = false;
 
@@ -108,7 +108,7 @@ function buildMockAdapter(options: MockAdapterOptions): ProtocolAdapter {
   };
 }
 
-interface WebhookAdapterOptions {
+export interface WebhookAdapterOptions {
   /** 监听端口。 */
   port?: number;
   host?: string;
@@ -144,7 +144,7 @@ const DEFAULT_MAPPING: Record<string, string[]> = {
   direction: ['direction', 'isSend', 'fromSelf'],
 };
 
-function buildWebhookAdapter(options: WebhookAdapterOptions): ProtocolAdapter {
+export function buildWebhookAdapter(options: WebhookAdapterOptions): ProtocolAdapter {
   let server: Server | null = null;
   const mapping = { ...DEFAULT_MAPPING, ...(options.mapping ?? {}) };
   const path = options.path ?? '/webhook';
@@ -266,17 +266,6 @@ function readBody(req: IncomingMessage, limit: number): Promise<string> {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
-}
-
-/** 注册内置适配器。由 `bootstrap()` 调用一次，避免模块导入副作用。 */
-export function registerBuiltinAdapters(): void {
-  const existing = new Set(listAdapterProtocols());
-  if (!existing.has('mock')) {
-    registerAdapter('mock', async (options) => buildMockAdapter(options as MockAdapterOptions));
-  }
-  if (!existing.has('http-webhook')) {
-    registerAdapter('http-webhook', async (options) => buildWebhookAdapter(options as WebhookAdapterOptions));
-  }
 }
 
 export { coerceKind, mapPayload };

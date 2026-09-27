@@ -3,7 +3,11 @@
 ## 分层
 
 ```
-协议层    src/core/types.ts · src/protocols.ts
+宿主层    src/core/host-bridge.ts · src/client/
+          微信 PC 客户端 / 企业微信 / Electron 壳
+          提供宿主能力（通知、角标、原生发送），并投递消息
+              ↓  HostTransport.inject()
+协议层    src/core/types.ts · src/protocols/
           各家微信协议 → NormalizedMessage
               ↓
 核心层    src/core/     引擎骨架：事件总线、存储、配置、插件、分词
@@ -13,15 +17,44 @@
               ↓
 装配层    src/runtime/  引擎运行时与 bootstrap
               ↓
-接口层    src/api · src/cli.ts · src/plugins
+接口层    src/api · src/client/panel.ts · src/cli.ts · src/plugins
 ```
 
 依赖方向单向向下。领域层可以单独 `import` 使用（例如只把 `AnalyticsEngine` 接进自己的服务），
 不必启动整个引擎。
 
+### 为什么把宿主也当成一层
+
+微信 PC 客户端插件与「引擎 + HTTP 中间件」的差别只有一处：**引擎被宿主反向调用**。
+需要弹客户端通知、设置角标、弹保存框时，是引擎调宿主，方向与收消息相反。
+
+把这种反向调用直接写成 `import` 宿主 API 会带来两个问题：领域层反向依赖宿主实现，
+离线跑不起来；宿主版本差异（不同微信版本的 API 不同）会渗透进领域代码。
+
+因此定义一份**能力契约** `HostBridge`：引擎按能力名调用，宿主按能力名注册，缺能力就降级。
+目前覆盖 13 项能力（`notify`/`setBadge`/`setTitleBadge`/`openPanel`/`toast`/
+`openExternal`/`pickFile`/`exportFile`/`readClipboard`/`writeClipboard`/`contacts`/
+`nativeSend`/`shutdown`），新增能力只加枚举 + 类型，不动调用点。
+
+判断能力是否可用靠「**是不是函数**」而不是「字段是否存在」：插件壳常见做法是
+声明一堆可选方法却只实现一部分，用字段存在性判断会把空实现误判为可用能力。
+
 ## 关键设计决策
 
-### 1. 协议差异收敛在适配器，归一化只做一次
+### 1. 消息入口只有一条，三种注入路径共用
+
+PC 客户端进程内直投、本地 IPC、HTTP 中间件、离线导入——四条来源最终都调用
+`Engine.ingestRaw()`（或它的上层 `HostTransport.inject()`）。
+
+这条约束的价值在于**统计口径唯一**：如果「实时消息」与「导入消息」各走一套归一化，
+同一个群会算出两套数字，而且这种偏差只在数据混用时才暴露，极难排查。
+
+同理，`HostTransport` 的绑定用 getter 而不是字段持有适配器实例：
+适配器由引擎的注册表工厂创建，工厂可能被多次调用；如果宿主入口持有的是另一个实例，
+注入会落到一个没有订阅者的 transport 上——**消息全丢，日志却一切正常**。
+这类「静默失败」是客户端插件最典型的坑，所以从结构上排除。
+
+### 2. 协议差异收敛在适配器，归一化只做一次
 
 各协议字段命名完全不同（`msgId`/`MsgId`/`newMsgId`、`fromUser`/`sender`），
 但**归一化逻辑只有一份**：适配器负责「取字段」，引擎负责「转换」。因此：
@@ -99,6 +132,18 @@ kv             群知识与内部状态
 
 索引：`idx_messages_conv_ts`、`idx_messages_conv_sender_ts`、`idx_activity_conv_bucket`、
 `idx_word_conv_count`、`idx_events_conv_ts`。
+
+## 可注入点与降级
+
+| 事实 | 处理方式 |
+|---|---|
+| 微信 PC 端是闭源客户端，无官方插件 SDK | 支持三条注入路径（进程内壳 / 本地 IPC / 导入），核心代码零改动 |
+| 宿主 API 集合不可控 | 13 项能力全部可选，缺失时降级而非抛错 |
+| 宿主回调里抛错会打断客户端消息循环 | `HostGateway` 三层隔离：缺失返回失败、抛错记账、通知按 key 限流 |
+| 客户端 WebView 可能没有外网 | 面板压成单文件，CSS/JS/Logo 全内联 |
+| 客户端 WebView 内核版本不可控 | 面板只用手写 ES5 兼容语法，不引框架、不引 polyfill |
+| 畸形消息不应让插件崩掉 | `inject()` 返回结构化结果（`accepted` / `reason`），不抛错 |
+| 插件可能热重载 | 替换宿主桥时清空通知去重窗口，避免新会话告警被旧窗口静默吞掉 |
 
 ## 已知边界
 

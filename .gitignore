@@ -6,3 +6,4 @@ config.json
 data/
 .env
 .DS_Store
+*.tsbuildinfo

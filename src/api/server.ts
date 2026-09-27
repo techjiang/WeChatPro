@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AnalyticsEngine, DAY_MS, lastDays } from '../analytics/index.js';
 import { GroupManager } from '../manage/index.js';
 import { renderReport } from '../plugins/analytics.js';
+import { renderPanel } from '../client/panel.js';
+import { BRAND } from '../client/brand.js';
 import type { AppConfig } from '../core/config.js';
 import type { Engine } from '../runtime/engine.js';
 import type { AiService } from '../ai/index.js';
@@ -24,6 +26,8 @@ export interface ApiServerOptions {
   config: AppConfig;
   logger: Logger;
   ai?: AiService;
+  /** 客户端宿主句柄：存在时面板走客户端版渲染，并暴露宿主状态接口。 */
+  client?: import('../client/host.js').ClientHost;
 }
 
 export function buildServer(options: ApiServerOptions): FastifyInstance {
@@ -276,7 +280,78 @@ export function buildServer(options: ApiServerOptions): FastifyInstance {
 
   app.get('/', async (_request, reply) => {
     void reply.header('content-type', 'text/html; charset=utf-8');
-    return renderConsole();
+    // 有客户端宿主时用客户端面板（带宿主能力区块与品牌信息），否则用通用控制台。
+    return options.client ? renderPanel() : renderConsole();
+  });
+
+  /** 面板单文件导出：离线预览、或塞进客户端插件的资源目录。 */
+  app.get('/panel.html', async (_request, reply) => {
+    void reply.header('content-type', 'text/html; charset=utf-8');
+    return renderPanel();
+  });
+
+  /**
+   * 宿主状态。
+   *
+   * 面板「关于」页与 `wechatpro doctor` 都读它。字段刻意包含能力清单而不只是布尔值：
+   * 排查「为什么没弹通知」时，第一要确认的就是宿主到底有没有注册 `notify`。
+   */
+  app.get('/api/client', async () => {
+    const client = options.client;
+    return {
+      enabled: Boolean(client),
+      host: client?.host ?? 'none',
+      panelRoute: client?.panelRoute ?? config.client.panelRoute,
+      capabilities: client?.capabilities() ?? [],
+      notifyOnAlert: config.client.notifyOnAlert,
+      badgeMax: config.client.badgeMax,
+      callStats: client?.gateway.callStats() ?? [],
+      brand: BRAND,
+    };
+  });
+
+  /**
+   * 宿主注入入口（HTTP 形态）。
+   *
+   * 客户端插件壳在能直接 `inject()` 时不必用它；插件跑在辅助进程、
+   * 或调试时想用 curl 灌数据，就走这里。与 `/webhook` 的区别是它接受
+   * **微信 PC 原生字段**（`StrTalker`/`StrContent`…），不需要调用方先转换。
+   */
+  app.post('/api/ingest', async (request, reply) => {
+    const client = options.client;
+    if (!client) return reply.code(503).send({ error: 'client mode disabled' });
+    const body = request.body as unknown;
+    if (Array.isArray(body)) {
+      return client.ingestBatch(body as Array<Record<string, unknown>>);
+    }
+    const result = await client.ingest(body as Record<string, unknown>);
+    return reply.code(result.accepted ? 202 : 422).send(result);
+  });
+
+  /**
+   * 让宿主把面板拉到前台（例如群内 `/面板` 指令、或风控告警点击后跳转）。
+   * 同时清掉角标——用户已经看到了。
+   */
+  app.post('/api/client/focus', async (request, reply) => {
+    const client = options.client;
+    if (!client) return reply.code(503).send({ error: 'client mode disabled' });
+    const body = z.object({ route: z.string().optional() }).parse(request.body ?? {});
+    return client.focus(body.route);
+  });
+
+  /** 群档案导出：交给宿主弹原生保存对话框；宿主不支持时返回内容让前端自己下载。 */
+  app.get('/api/conversations/:id/export', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!engine.store.getConversation(id)) {
+      return reply.code(404).send({ error: 'conversation not found' });
+    }
+    const payload = manager.exportConversation(id);
+    const filename = `wechatpro-${id.replace(/[@:]/, '_')}.json`;
+    const content = JSON.stringify(payload, null, 2);
+    const saved = options.client
+      ? await options.client.gateway.exportFile({ filename, content })
+      : null;
+    return { filename, savedTo: saved, content: saved ? undefined : content };
   });
 
   app.setErrorHandler((error, _request, reply) => {

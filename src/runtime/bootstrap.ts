@@ -1,16 +1,19 @@
 import { Engine } from './engine.js';
 import { parseConfig, applyEnvOverrides, ConfigError, type AppConfig } from '../core/config.js';
-import { registerBuiltinAdapters } from '../protocols.js';
+import { registerBuiltinAdapters } from '../protocols/index.js';
 import { createAnalyticsPlugin } from '../plugins/analytics.js';
 import { createAiPlugin } from '../plugins/ai.js';
+import { createClientPlugin } from '../plugins/client.js';
 import { createCommandPlugin } from '../plugins/command.js';
 import { createGuardPlugin } from '../plugins/guard.js';
 import { createManagePlugin } from '../plugins/manage.js';
 import { createRulesInspectorPlugin } from '../plugins/rules-inspector.js';
 import { buildServer, assertSafeBinding } from '../api/server.js';
 import { AiService } from '../ai/index.js';
+import { createClientHost, type ClientHost } from '../client/host.js';
 import { readFile } from 'node:fs/promises';
 import type { Plugin } from '../core/plugin.js';
+import type { HostBridge } from '../core/host-bridge.js';
 import type { FastifyInstance } from 'fastify';
 import type { Logger } from 'pino';
 
@@ -19,6 +22,12 @@ import type { Logger } from 'pino';
  *
  * 分开「注册内置插件」与「启动引擎」两步：测试里常需要只起引擎不起 HTTP，
  * 或替换某个插件为桩，所以 bootstrap 返回各部分句柄而不是直接开跑。
+ *
+ * 两种运行形态共用同一条装配线：
+ *
+ * - **服务形态**（默认）：引擎监听协议中间件推来的 HTTP 事件，面板走 `api.port`。
+ * - **客户端形态**（`client.enabled`）：引擎被嵌进微信 PC 客户端进程，宿主直接注入消息，
+ *   面板由宿主内嵌渲染。此时 `host` 适配器由 bootstrap 自动接上，并暴露 `client` 句柄。
  */
 
 export interface BootstrapOptions {
@@ -29,6 +38,10 @@ export interface BootstrapOptions {
   extraPlugins?: Plugin[];
   /** 是否注册内置插件，默认 true。 */
   withBuiltinPlugins?: boolean;
+  /** 客户端宿主桥；给出即进入客户端形态（等价于 `client.enabled`）。 */
+  hostBridge?: HostBridge;
+  /** 强制启用/禁用客户端形态，覆盖配置。 */
+  clientMode?: boolean;
 }
 
 export interface BootstrapResult {
@@ -36,6 +49,8 @@ export interface BootstrapResult {
   config: AppConfig;
   logger: Logger;
   server?: FastifyInstance;
+  /** 客户端宿主句柄；仅在客户端形态下存在。 */
+  client?: ClientHost;
   /** 启动全部组件。 */
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -44,6 +59,7 @@ export interface BootstrapResult {
 export const builtinPlugins: Plugin[] = [
   createAnalyticsPlugin(),
   createAiPlugin(),
+  createClientPlugin(),
   createCommandPlugin(),
   createGuardPlugin(),
   createManagePlugin(),
@@ -65,8 +81,34 @@ export async function loadConfig(configPath?: string, env: NodeJS.ProcessEnv = p
 }
 
 export async function bootstrap(options: BootstrapOptions = {}): Promise<BootstrapResult> {
-  registerBuiltinAdapters();
   const config = options.config ?? (await loadConfig(options.configPath));
+
+  const clientMode = options.clientMode ?? (config.client.enabled || Boolean(options.hostBridge));
+
+  // 客户端形态：先建宿主句柄，再把「造适配器的方式」交给注册表，
+  // 这样引擎绑定的一定是 `client.ingest()` 用的那个 transport。
+  const host = clientMode
+    ? createClientHost({
+        host: config.client.host,
+        panelRoute: config.client.panelRoute,
+        ...(options.hostBridge ? { bridge: options.hostBridge } : {}),
+      })
+    : undefined;
+
+  registerBuiltinAdapters(
+    host
+      ? { hostGateway: host.gateway, hostFactory: async () => host.adapter }
+      : {},
+  );
+  const client = host;
+
+  if (client) {
+    // 客户端形态下 `host` 适配器必然启用：它就是消息来源，关掉等于引擎空转。
+    const hasHostAdapter = config.adapters.some((adapter) => adapter.protocol === 'host');
+    if (!hasHostAdapter) {
+      config.adapters.unshift({ protocol: 'host', enabled: true, options: { host: config.client.host } });
+    }
+  }
 
   const plugins: Plugin[] = options.withBuiltinPlugins === false ? [] : [...builtinPlugins];
   for (const plugin of options.extraPlugins ?? []) {
@@ -75,25 +117,32 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     else plugins.push(plugin);
   }
 
-  const engine = new Engine({ config, plugins });
+  const engine = new Engine({ config, plugins, ...(client ? { client } : {}) });
   const ai = new AiService({ config, store: engine.store, logger: engine.logger });
 
   let server: FastifyInstance | undefined;
   if (config.api.enabled) {
     assertSafeBinding(config);
-    server = buildServer({ engine, config, logger: engine.logger, ai });
+    server = buildServer({ engine, config, logger: engine.logger, ai, client });
   }
 
   return {
     engine,
     config,
     logger: engine.logger,
-    server,
+    ...(server ? { server } : {}),
+    ...(client ? { client } : {}),
     async start(): Promise<void> {
       await engine.start();
       if (server) {
         const address = await server.listen({ host: config.api.host, port: config.api.port });
         engine.logger.info({ address }, '控制台已启动');
+      }
+      if (client) {
+        engine.logger.info(
+          { host: client.host, capabilities: client.capabilities() },
+          '客户端宿主模式已就绪：等待宿主注入消息',
+        );
       }
     },
     async stop(): Promise<void> {

@@ -13,13 +13,28 @@ export type EventName =
   | 'member.leave'
   | 'alert'
   | 'command'
-  | 'engine.error';
+  | 'engine.error'
+  /**
+   * 适配器投递的、引擎未识别的原样事件。
+   *
+   * 新增协议会带来新事件类型（`friend.request`、`room.notice`…），
+   * 引擎不必理解它们，但要能转发给插件；插件按 `raw.type` 自己分发。
+   */
+  | 'raw';
 
 export interface BusEvent {
   name: EventName;
   /** 毫秒时间戳。 */
   at: number;
   payload: unknown;
+  /**
+   * 适配器原始事件。
+   *
+   * 只有 `raw` 事件会带它，用于「引擎不认识的协议特有事件」透传——
+   * 客户端插件壳会自己推自定义事件（好友申请、群公告变更、客户端启动/退出），
+   * 把它们硬塞进固定枚举会立刻过时，所以留一条不解析的通道。
+   */
+  raw?: { protocol: string; type: string; payload: unknown };
 }
 
 export type Listener = (event: BusEvent) => void;

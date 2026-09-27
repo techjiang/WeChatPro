@@ -45,6 +45,9 @@ CMD ["node", "dist/cli.js", "start", "--config", "/app/config.json"]
 - [ ] 控制台建议放在反向代理后并启用 HTTPS
 - [ ] `adapters[].options.token` 与 `api.token` 不要复用同一个值
 - [ ] AI 的 `apiKey` 用环境变量 `WECHATPRO_AI_API_KEY` 注入，不要写进配置文件
+- [ ] 客户端形态下 `api.host` 保持 `127.0.0.1`：面板与宿主同机，没必要对外监听
+- [ ] `transport: "http"` 时必配 `token`（引擎会拒绝无 token 的非回环绑定）
+- [ ] 排查完记得关掉 `host.options.dumpDir`，它会落盘原始聊天内容
 - [ ] 数据目录权限收紧（含群成员与聊天内容）
 - [ ] `corsOrigins` 只填需要的来源，不要用 `*`
 

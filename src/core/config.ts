@@ -85,6 +85,38 @@ const storageSchema = z.object({
   wal: z.boolean().default(true),
 });
 
+/**
+ * PC 客户端宿主配置。
+ *
+ * 这是「在微信 APP 内直接使用」的开关：开启后引擎不再等待 HTTP 推送，
+ * 而是由客户端插件壳把消息投进来，并把面板挂到客户端窗口里。
+ */
+const clientSchema = z
+  .object({
+    /** 是否启用客户端宿主形态。 */
+    enabled: z.boolean().default(false),
+    /** 宿主标识，仅用于展示与排障。 */
+    host: z.string().default('wechat-pc'),
+    /** 宿主版本，便于判断某能力是否可用。 */
+    hostVersion: z.string().default(''),
+    /** 面板在客户端里的默认路由。 */
+    panelRoute: z.string().default('#/dashboard'),
+    /** 客户端打开面板时是否先清角标。 */
+    clearBadgeOnFocus: z.boolean().default(true),
+    /**
+     * 风控告警是否顺带弹客户端原生通知。
+     * 默认开启：插件的价值就在于「不用盯着也能知道群里出事了」。
+     */
+    notifyOnAlert: z.boolean().default(true),
+    /** 同一告警的去重窗口（毫秒），防止刷屏把客户端通知队列打爆。 */
+    notifyDedupeMs: z.number().int().positive().default(60_000),
+    /** 未读角标上限，超过只显示 `+`，避免角标数字撑爆入口。 */
+    badgeMax: z.number().int().min(0).default(99),
+    /** 客户端本地库 / 数据目录，插件壳用它找会话文件。 */
+    dataDir: z.string().default(''),
+  })
+  .prefault({});
+
 const pluginSchema = z.object({
   name: z.string().min(1),
   enabled: z.boolean().default(true),
@@ -100,6 +132,7 @@ export const configSchema = z.object({
   ai: aiSchema.prefault({}),
   manage: manageSchema.prefault({}),
   api: apiSchema.prefault({}),
+  client: clientSchema,
   plugins: z.array(pluginSchema).default([]),
 });
 
@@ -107,6 +140,7 @@ export type AppConfig = z.infer<typeof configSchema>;
 export type AdapterConfig = z.infer<typeof adapterSchema>;
 export type GuardRuleConfig = z.infer<typeof guardRuleSchema>;
 export type PluginConfig = z.infer<typeof pluginSchema>;
+export type ClientConfig = z.infer<typeof clientSchema>;
 
 /** 校验失败时抛出，携带字段级路径，便于直接打印给人看。 */
 export class ConfigError extends Error {
@@ -143,5 +177,7 @@ export function applyEnvOverrides(config: AppConfig, env: NodeJS.ProcessEnv = pr
   if (env.WECHATPRO_AI_BASE_URL) next.ai.baseUrl = env.WECHATPRO_AI_BASE_URL;
   if (env.WECHATPRO_AI_MODEL) next.ai.model = env.WECHATPRO_AI_MODEL;
   if (env.WECHATPRO_AI_ENABLED) next.ai.enabled = env.WECHATPRO_AI_ENABLED === 'true';
+  if (env.WECHATPRO_CLIENT_ENABLED) next.client.enabled = env.WECHATPRO_CLIENT_ENABLED === 'true';
+  if (env.WECHATPRO_CLIENT_HOST) next.client.host = env.WECHATPRO_CLIENT_HOST;
   return next;
 }

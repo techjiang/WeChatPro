@@ -18,6 +18,7 @@ node dist/cli.js check --config config.json   # 校验配置并打印解析结�
 | `ai` | object | — | AI 配置 |
 | `manage` | object | — | 信息管理配置 |
 | `api` | object | — | HTTP 控制台配置 |
+| `client` | object | — | **PC 客户端宿主配置**（见下） |
 | `plugins` | array | `[]` | 各插件的私有配置 |
 
 ## storage
@@ -31,13 +32,44 @@ node dist/cli.js check --config config.json   # 校验配置并打印解析结�
 
 ```json
 {
-  "protocol": "http-webhook",
+  "protocol": "host",
   "enabled": true,
   "options": { }
 }
 ```
 
-`options` 由各适配器自行定义。
+`options` 由各适配器自行定义。可选协议：`host`（PC 客户端，主形态）、`http-webhook`、`mock`。
+
+### `host` — PC 客户端进程内注入
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `host` | `wechat-pc` | 宿主标识，仅用于展示与排障 |
+| `mapping` | `WECHAT_PC_MAPPING` | 字段映射覆盖值；换微信版本只改这里 |
+| `transport` | `none` | `none` = 进程内直投（推荐）；`http` = 本地 IPC 回环 |
+| `httpHost` / `httpPort` / `httpPath` | `127.0.0.1` / 随机 / `/host/inject` | `transport=http` 时的监听参数 |
+| `token` | — | `transport=http` 的校验令牌；**绑非回环地址必填** |
+| `outbound` | `host` | 出站方式：`host` 走宿主原生发送，`http` 走 `outboundUrl` |
+| `outboundUrl` | — | `outbound=http` 的目标地址 |
+| `dumpDir` | — | 把收到的原始载荷按天落 NDJSON，排障用；默认关闭 |
+
+默认字段映射（微信 PC 端字段名）：
+
+| 归一化字段 | 默认候选 |
+| --- | --- |
+| `id` | `MsgSvrID`, `msgSvrId`, `LocalId`, `localId`, `id`, `msgId` |
+| `conversationId` | `StrTalker`, `strTalker`, `TalkerId`, `conversationId`, `roomId` |
+| `conversationName` | `RoomName`, `roomName`, `NickName`, `conversationName` |
+| `senderId` | `StrSender`, `strSender`, `Sender`, `senderId`, `fromUser` |
+| `senderName` | `SenderNick`, `senderNick`, `PushContent`, `senderName` |
+| `text` | `StrContent`, `strContent`, `Content`, `text`, `msg` |
+| `kind` | `Type`, `MsgType`, `msgType`, `kind`, `SubType` |
+| `timestamp` | `CreateTime`（秒级，自动转毫秒）, `createTime`, `timestamp` |
+| `direction` | `IsSender`, `isSender`, `direction` |
+
+`Type` 取值映射：`1`→text、`3`→image、`34`→voice、`37`/`42`→card、`43`→video、
+`47`→sticker、`48`→location、`49`→link、`50`→video、`10000`→system、`10002`→revoke。
+未知取值落到 `unknown`，不抛错。
 
 ### `http-webhook`
 

@@ -19,4 +19,9 @@ export interface EngineContext {
   adapters: ReadonlyMap<string, ProtocolAdapter>;
   /** 主动发消息：挑一个支持 `send` 的适配器代发。 */
   sendMessage(conversationId: string, text: string): Promise<boolean>;
+  /**
+   * 客户端宿主句柄（仅在 PC 客户端形态下存在）。
+   * 类型用 `unknown` 是为了让核心层不反向依赖 `src/client/`——插件自行做窄化。
+   */
+  client?: unknown;
 }

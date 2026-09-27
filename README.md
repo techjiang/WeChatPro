@@ -1,9 +1,25 @@
-# WeChatPro
+<div align="center">
+  <img src="brand/logo-256.png" width="128" alt="WeChatPro Logo">
+  <h1>WeChatPro</h1>
+  <p><b>微信 PC 客户端插件</b> · 群聊统计 · 自动化检测 · 群聊信息管理 · AI 助手</p>
+  <p>装在微信里，打开面板即用 —— 不用另起服务，不用把聊天记录搬到别处</p>
+</div>
 
-专业微信社群智能引擎：**AI 助手 · 群聊统计 · 自动化检测 · 群聊信息管理**。
+---
 
-面向群主与运营团队，把「今天群里聊了什么、谁在活跃、有没有人在打广告、要不要留档」
-这几件事做成可查询、可告警、可自动化的能力，而不是靠人工翻聊天记录。
+## 形态：跑在微信 PC 客户端里
+
+WeChatPro 是一个**微信 PC 客户端插件**。引擎嵌在客户端进程内，消息由客户端直接递进来，
+面板挂在客户端窗口里打开；打开插件面板就能看统计、查风控、管成员、导档案。
+
+```
+微信 PC 客户端
+  └── WeChatPro 插件壳      ← 实现宿主能力（通知、角标、原生发送、文件对话框）
+        └── 引擎 · 面板       ← 本仓库
+```
+
+没有插件壳也能跑：引擎支持 HTTP 中间件推送与离线导入，
+同一份代码、同一套统计口径，三种形态可以同时开（见 [接入方式](#接入方式)）。
 
 ## 能力概览
 
@@ -13,7 +29,8 @@
 | **自动化检测** | 敏感词、广告导流、刷屏、重复内容、@ 轰炸、媒体刷屏、深夜扰民、自定义词表；滑动窗口风险分累计 |
 | **AI 助手** | 群聊摘要（分段+归并）、群内检索问答（RAG）、语义审核、群知识自动沉淀 |
 | **信息管理** | 群档案、成员台账、群知识库、数据留存策略、档案导出迁移 |
-| **控制台** | 自包含 Web 看板 + REST API + CLI |
+| **客户端集成** | 原生通知、入口角标、面板唤起、文件对话框、剪贴板、原生发送 |
+| **控制台** | 客户端内嵌面板（9 个视图，单文件零依赖）+ REST API + CLI |
 
 ## 快速开始
 
@@ -21,12 +38,28 @@
 npm install
 npm run build
 
-# 启动（默认读取 ./config.json，不存在则用内置默认值）
-cp config.example.json config.json
-node dist/cli.js start --config config.json
+node dist/cli.js doctor          # 环境自检：配置 / 数据 / 宿主能力 / 品牌资源
+node dist/cli.js client --config examples/config.client.json
 ```
 
-打开 <http://127.0.0.1:8787> 即为控制台。
+打开 <http://127.0.0.1:8787> 就是面板。模拟客户端投递一条微信原生字段的消息：
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/ingest \
+  -H 'content-type: application/json' \
+  -d '{"MsgSvrID":"1","StrTalker":"12345@chatroom","RoomName":"产品交流群",
+       "StrSender":"wxid_a","SenderNick":"张工","StrContent":"本周进度同步","Type":1,
+       "CreateTime":1790000000}'
+```
+
+接真实客户端（写插件壳、或用本地 IPC）见 [`docs/pc-client.md`](./docs/pc-client.md)。
+
+### 不接客户端也能用
+
+```bash
+node dist/cli.js start --config examples/config.mock.json   # 回放演示数据
+node dist/cli.js import chat.txt --conversation 'g@chatroom' # 导入聊天导出文本
+```
 
 ### 零依赖体验（内置演示数据源）
 
@@ -50,11 +83,25 @@ EOF
 node dist/cli.js start --config demo.json
 ```
 
-## 接入真实微信协议
+## 接入方式
 
-引擎不绑定某一家协议。两个通用底座已内置：
+引擎不绑定某一家协议，三条路径共用同一套归一化与统计口径：
 
-### 1. `http-webhook`（推荐先用这个）
+### 1. `host` — PC 客户端进程内注入（主形态）
+
+宿主直接投递微信原生字段的消息对象，零网络往返：
+
+```ts
+const { client, engine, start } = await bootstrap({ clientMode: true, hostBridge: nativBridge });
+await start();
+native.onMessage((payload) => void client!.ingest(payload));   // StrTalker/StrContent/MsgSvrID…
+native.onActivate(() => void client!.focus());                  // 打开面板 + 清角标
+```
+
+内置 `WECHAT_PC_MAPPING` 已覆盖微信字段名与消息类型（`1`→text、`3`→image…），
+换版本只改 `mapping`，不动代码。详见 [`docs/pc-client.md`](./docs/pc-client.md)。
+
+### 2. `http-webhook` — HTTP 中间件推送
 
 任何能把事件推到 HTTP 的微信中间件都能接：本地 hook 程序、协议网关、企业微信应用。
 
@@ -86,7 +133,7 @@ curl -X POST http://127.0.0.1:8790/webhook \
 
 时间戳兼容秒/毫秒/ISO 字符串，消息类型兼容字符串与数字（`1`→text、`3`→image…）。
 
-### 2. 自定义适配器
+### 3. 自定义适配器
 
 对接私有协议只需实现 `ProtocolAdapter` 并注册，**不修改引擎代码**：
 
@@ -122,6 +169,8 @@ registerAdapter('my-protocol', async (options, deps) => ({
 /总结 [今天|本周]                 AI 群聊摘要
 /ask <问题>                       基于群内记录问答
 /规则                            查看生效的检测规则
+/面板                             在微信客户端里打开 WeChatPro 面板   ← 客户端形态
+/导出                             导出群档案（宿主弹保存框）          ← 客户端形态
 help / 帮助                        指令菜单
 ```
 
@@ -139,6 +188,9 @@ help / 帮助                        指令菜单
 | `WECHATPRO_SQLITE_PATH` | 数据文件路径 |
 | `WECHATPRO_API_HOST` / `WECHATPRO_API_PORT` / `WECHATPRO_API_TOKEN` | 控制台监听与鉴权 |
 | `WECHATPRO_AI_ENABLED` / `WECHATPRO_AI_API_KEY` / `WECHATPRO_AI_BASE_URL` / `WECHATPRO_AI_MODEL` | AI 接入 |
+| `WECHATPRO_CLIENT_ENABLED` / `WECHATPRO_CLIENT_HOST` | 开启 PC 客户端形态 |
+| `WECHATPRO_HOST_SHELL` | 客户端插件壳模块路径（`client` 命令据此加载宿主能力） |
+| `WECHATPRO_HOST_NAME` / `WECHATPRO_HOST_VERSION` / `WECHATPRO_PLUGIN_VERSION` | 宿主标识，写进 `/api/client` |
 
 > **安全**：`api.host` 为非回环地址时必须配置 `api.token`，否则引擎拒绝启动 —— 看板含群成员与聊天内容，不可无鉴权暴露。
 
@@ -162,13 +214,23 @@ help / 帮助                        指令菜单
 | POST | `/api/conversations/:id/ask` | 群内问答 |
 | GET | `/api/rules` | 生效的检测规则 |
 | GET | `/api/stats` | 引擎统计 |
+| POST | `/api/ingest` | **宿主注入消息**（接受微信原生字段，支持单条与批量） |
+| GET | `/api/client` | **宿主状态**：身份、可用能力、调用统计、品牌信息 |
+| POST | `/api/client/focus` | **让宿主拉起面板**并清角标 |
+| GET | `/api/conversations/:id/export` | **导出群档案**（宿主能弹保存框就交给宿主） |
+| GET | `/panel.html` | 导出单文件面板 |
 
 配置了 `api.token` 时，请求需带 `Authorization: Bearer <token>` 或 `x-wechatpro-token`。
 
 ## CLI
 
 ```bash
-node dist/cli.js start [--config <path>]           启动引擎与控制台
+node dist/cli.js start [--config <path>]           启动引擎与面板
+node dist/cli.js client [--config <path>]          PC 客户端插件形态启动
+node dist/cli.js ui [--out panel.html]             导出单文件面板（离线可开）
+node dist/cli.js doctor [--json]                   环境自检
+node dist/cli.js import <file|-> [options]         导入聊天导出文本 / 宿主 JSON
+node dist/cli.js brand [--json]                    品牌信息与资源状态
 node dist/cli.js report <conversationId> [--days 7] 统计报表
 node dist/cli.js conversations                      会话列表
 node dist/cli.js members <conversationId>           成员台账
@@ -182,42 +244,66 @@ node dist/cli.js adapters | plugins                 已注册的适配器 / 插�
 ## 架构
 
 ```
-适配器 (ProtocolAdapter)          协议差异只在这一层
-        │  RawEvent
+宿主 (微信 PC 客户端 / HTTP 中间件 / 导入)
+        │  HostTransport.inject()      ← 进程内直投，无网络
+        │       或 ProtocolAdapter      ← HTTP / 自定义协议
         ▼
-引擎 Engine                       归一化 + 幂等去重 + 落库
+引擎 Engine                              归一化 + 幂等去重 + 落库
         │  NormalizedMessage
         ▼
-事件总线 EventBus                 同步派发，订阅者互不影响
+事件总线 EventBus                        同步派发，订阅者互不影响
         ├── analytics   统计预聚合与报表
         ├── guard       规则引擎与风险累计
         ├── ai          LLM 网关 / 检索 / 摘要
         ├── manage      群档案 / 知识库 / 留存
-        └── command     指令路由
+        ├── command     指令路由
+        └── client      原生通知 / 角标 / 面板唤起   ← 客户端形态
         ▼
-SQLite (WAL)                      窄表 + 覆盖索引 + 预聚合
+SQLite (WAL)                             窄表 + 覆盖索引 + 预聚合
         ▼
-HTTP API / 控制台 / CLI
+客户端内嵌面板 / HTTP API / CLI
 ```
 
 设计要点与取舍见 [`docs/architecture.md`](./docs/architecture.md)。
+客户端形态的可注入点与降级策略见 [`docs/pc-client.md`](./docs/pc-client.md)。
 
 ## 开发
 
 ```bash
 npm run typecheck   # 类型检查
-npm test            # 144 个测试
+npm test            # 189 个测试
 npm run build       # 编译到 dist/
 npm run dev         # tsx watch 热重载
+
+# 面板可视化验证（可选，需要 playwright）
+node dist/cli.js ui --out /tmp/panel.html   # 导出后用浏览器打开
+```
+
+重新生成品牌图标（可选，需要 sharp）：
+
+```bash
+npm i -D sharp && npx tsx scripts/brand-assets.ts brand/logo.png
 ```
 
 ## 文档
 
+- [`docs/pc-client.md`](./docs/pc-client.md) — **在微信 PC 客户端内使用与管理**（注入路径、字段映射、降级、排障）
 - [`docs/architecture.md`](./docs/architecture.md) — 架构与关键设计取舍
 - [`docs/configuration.md`](./docs/configuration.md) — 配置项详解
 - [`docs/guard-rules.md`](./docs/guard-rules.md) — 检测规则与自定义方式
 - [`docs/deployment.md`](./docs/deployment.md) — 部署与运维
+- [`brand/README.md`](./brand/README.md) — 品牌资源与图标生成
 - [`examples/`](./examples) — 可直接运行的示例
+
+## 作者
+
+**科技酱**
+
+- 网站：<https://docs.asoe.cn>
+- GitHub：<https://github.com/techjiang/>
+- 哔哩哔哩：<https://space.bilibili.com/1768832152>
+- 玲珑论坛：<https://forums.asoe.cn/>
+- QQ 群：291974598 ｜ 474819022
 
 ## 许可
 

@@ -1,3 +1,7 @@
+# CI：微信 PC 客户端插件形态的引擎与面板
+#
+# 校验顺序从「快且便宜」到「慢且贵」：类型检查先挡低级错误，测试次之，
+# 最后才编译并对产物做冒烟——失败反馈最快，也最省构建额度。
 main:
   push:
     - name: check
@@ -12,11 +16,27 @@ main:
           script: npm test
         - name: build
           script: npm run build
-        - name: verify-artifacts
+        - name: verify-cli
+          # 冒烟：每个 CLI 子命令都要能真的跑起来。
+          # 只 build 不冒烟的话，「编译通过但一执行就崩」会一路带到用户手上。
           script: |
             node dist/cli.js check --config config.example.json > /dev/null
+            node dist/cli.js check --config examples/config.client.json > /dev/null
             node dist/cli.js adapters
             node dist/cli.js plugins
+            node dist/cli.js brand --json
+            node dist/cli.js doctor --json > /dev/null || true
+            node dist/cli.js ui --out /tmp/panel.html > /dev/null
+            test -s /tmp/panel.html
+        - name: verify-panel
+          # 面板是零依赖单文件：出现任何外链资源都会让客户端 WebView 白屏。
+          # 把这条约束固化成构建期断言，而不是靠人记得。
+          script: node scripts/verify-panel.mjs /tmp/panel.html
+        - name: verify-client
+          # 端到端：起客户端形态 → 注入微信原生字段消息 → 断言入库 + 风控命中。
+          # 这是「在微信里能不能真的用」的最小可信证据，且刻意走编译产物，
+          # 能发现「源码测试还绿、编译后却坏了」的问题。
+          script: node scripts/smoke-client.mjs
   pull_request:
     - name: check
       docker:
@@ -30,3 +50,14 @@ main:
           script: npm test
         - name: build
           script: npm run build
+        - name: verify-cli
+          script: |
+            node dist/cli.js check --config config.example.json > /dev/null
+            node dist/cli.js adapters
+            node dist/cli.js plugins
+            node dist/cli.js ui --out /tmp/panel.html > /dev/null
+            test -s /tmp/panel.html
+        - name: verify-panel
+          script: node scripts/verify-panel.mjs /tmp/panel.html
+        - name: verify-client
+          script: node scripts/smoke-client.mjs

@@ -18,7 +18,7 @@ export {
   applyEnvOverrides,
   ConfigError,
 } from './core/config.js';
-export type { AppConfig, AdapterConfig, GuardRuleConfig, PluginConfig } from './core/config.js';
+export type { AppConfig, AdapterConfig, ClientConfig, GuardRuleConfig, PluginConfig } from './core/config.js';
 export { resolvePluginOrder, PluginGraphError } from './core/plugin.js';
 export type { Plugin, PluginManifest } from './core/plugin.js';
 export type { EngineContext } from './core/context.js';
@@ -34,7 +34,33 @@ export type {
 } from './core/types.js';
 
 export { registerAdapter, listAdapterProtocols, pick, toMillis } from './core/registry.js';
-export { registerBuiltinAdapters } from './protocols.js';
+export { registerBuiltinAdapters } from './protocols/index.js';
+export {
+  buildMockAdapter,
+  buildWebhookAdapter,
+  createHostAdapter,
+  HostTransport,
+  WECHAT_PC_MAPPING,
+  WECHAT_KIND_ALIASES,
+  coerceHostKind,
+  parseChatExport,
+} from './protocols/index.js';
+export type { HostAdapterOptions, HostIngestPayload, IngestResult } from './protocols/index.js';
+
+/* ── PC 客户端形态（主要交付形态）────────────────────────── */
+export { HostGateway, HOST_CAPABILITIES } from './core/host-bridge.js';
+export type {
+  HostBridge,
+  HostCapability,
+  HostNotifyOptions,
+  HostContact,
+  HostSendRequest,
+} from './core/host-bridge.js';
+export { createClientHost, bridgeFromShell } from './client/host.js';
+export type { ClientHost, ClientHostOptions, ClientShellApi } from './client/host.js';
+export { renderPanel } from './client/panel.js';
+export { BRAND, BRAND_COLORS, brandIcon, asciiBanner } from './client/brand.js';
+export { createClientPlugin } from './plugins/client.js';
 
 export { AnalyticsEngine, topWordsOf, lastDays, DAY_MS, HOUR_MS } from './analytics/index.js';
 export type {

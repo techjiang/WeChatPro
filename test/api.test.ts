@@ -1,7 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildServer, assertSafeBinding } from '../src/api/server.js';
 import { AiService } from '../src/ai/index.js';
 import { createTestEngine, message, testConfig } from './helpers.js';
+import { createClientHost } from '../src/client/host.js';
+import { registerBuiltinAdapters } from '../src/protocols/index.js';
+import { renderPanel } from '../src/client/panel.js';
 import { HOUR_MS } from '../src/analytics/index.js';
 import type { FastifyInstance } from 'fastify';
 import type { Engine } from '../src/runtime/engine.js';
@@ -240,5 +243,193 @@ describe('assertSafeBinding', () => {
 
   it('回环地址无 token 时允许', () => {
     expect(() => assertSafeBinding(testConfig({ api: { host: '127.0.0.1' } }))).not.toThrow();
+  });
+});
+
+
+/**
+ * PC 客户端形态的 API 面。
+ *
+ * 这组用例验证「在微信客户端里能直接用与管理」所需的接口：
+ * 宿主注入、宿主状态、面板拉起、群档案导出。
+ * 关键点是**所有接口在非客户端形态下都要给出明确错误而不是 500**——
+ * 插件壳的调用时机不受控，静默 500 会让排障变成猜谜。
+ */
+describe('客户端形态 API', () => {
+  let engine: Engine;
+  let app: FastifyInstance;
+  let client: ReturnType<typeof createClientHost>;
+
+  beforeEach(async () => {
+    client = createClientHost({ host: 'wechat-pc' });
+    const config = testConfig({
+      api: { enabled: true, port: 0 },
+      adapters: [{ protocol: 'host', options: { transport: 'none' } }],
+      client: { enabled: true },
+    });
+    engine = createTestEngine(config);
+    // 把宿主消息入口直连引擎的原始事件入口。不走适配器注册表是因为
+    // `registerBuiltinAdapters` 幂等（防重复注册），一个文件里只能生效一次，
+    // 拿不到每条用例各自新建的适配器实例；直连也正好是客户端形态的最短路径。
+    await engine.start();
+    client.transport.attachSink((event) => engine.ingestRaw(event));
+    app = buildServer({ engine, config, logger: engine.logger, client });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await engine.stop();
+  });
+
+  it('适配器不在链路里时，客户端注入仍走完整归一化与落库', async () => {
+    const result = await client.ingest({
+      MsgSvrID: 'wx1',
+      StrTalker: '8888@chatroom',
+      RoomName: '运营群',
+      StrSender: 'wxid_lee',
+      SenderNick: '李运营',
+      StrContent: '本周数据同步',
+      Type: 1,
+      CreateTime: 1_790_000_000,
+    });
+    expect(result.accepted).toBe(true);
+    expect(engine.store.getConversation('8888@chatroom')?.name).toBe('运营群');
+    expect(engine.stats.received).toBe(1);
+  });
+
+  it('面板首页在客户端形态下渲染客户端面板', async () => {
+    const response = await app.inject({ method: 'GET', url: '/' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('WeChatPro');
+    // 客户端面板有「关于」视图，通用控制台没有。
+    expect(response.body).toContain("'about'");
+    void renderPanel();
+  });
+
+  it('/panel.html 永远可导出单文件面板', async () => {
+    const response = await app.inject({ method: 'GET', url: '/panel.html' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body.startsWith('<!DOCTYPE html>')).toBe(true);
+  });
+
+  it('/api/client 汇报宿主身份、能力与品牌信息', async () => {
+    const notify = vi.fn();
+    client.attachHost({ host: 'wechat-pc', notify, setBadge: vi.fn() });
+    const response = await app.inject({ method: 'GET', url: '/api/client' });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.enabled).toBe(true);
+    expect(body.host).toBe('wechat-pc');
+    expect(body.capabilities).toEqual(expect.arrayContaining(['notify', 'setBadge']));
+    expect(body.brand.author).toBe('科技酱');
+    expect(body.brand.website).toBe('https://docs.asoe.cn');
+  });
+
+  it('接受微信原生字段的注入，并返回结构化结果', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ingest',
+      payload: {
+        MsgSvrID: 'wx1',
+        StrTalker: '8888@chatroom',
+        RoomName: '运营群',
+        StrSender: 'wxid_lee',
+        SenderNick: '李运营',
+        StrContent: '本周数据同步',
+        Type: 1,
+        CreateTime: 1_790_000_000,
+      },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json().accepted).toBe(true);
+    expect(engine.store.getConversation('8888@chatroom')?.name).toBe('运营群');
+  });
+
+  it('畸形注入回 422 而不是 500', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ingest',
+      payload: { StrContent: '没有会话与发送者' },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().reason).toBe('unmapped');
+  });
+
+  it('批量注入走数组分支', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ingest',
+      payload: [
+        { MsgSvrID: 'a', StrTalker: 'g@chatroom', StrSender: 'u', StrContent: '一', Type: 1, CreateTime: 1_790_000_000 },
+        { MsgSvrID: 'b', StrTalker: 'g@chatroom', StrSender: 'u', StrContent: '二', Type: 1, CreateTime: 1_790_000_001 },
+      ],
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ accepted: 2, dropped: 0 });
+  });
+
+  it('/api/client/focus 让宿主拉起面板并清角标', async () => {
+    const openPanel = vi.fn();
+    const setBadge = vi.fn();
+    client.attachHost({ host: 'wechat-pc', openPanel, setBadge });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/client/focus',
+      payload: { route: '#/guard' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ opened: true, badge: true });
+    expect(openPanel).toHaveBeenCalledWith('#/guard');
+    expect(setBadge).toHaveBeenCalledWith(0);
+  });
+
+  it('导出群档案：宿主能弹保存框就交给宿主，不能则回传内容', async () => {
+    for (let i = 0; i < 3; i += 1) {
+      engine.store.insertMessage(
+        message({ id: `e${i}`, conversation: { id: 'g1', kind: 'group', name: '测试群' } }),
+        [],
+        HOUR_MS,
+      );
+    }
+
+    const noHost = await app.inject({ method: 'GET', url: '/api/conversations/g1/export' });
+    expect(noHost.statusCode).toBe(200);
+    expect(noHost.json().content).toContain('测试群');
+    expect(noHost.json().savedTo).toBeNull();
+
+    const exportFile = vi.fn(async () => '/tmp/saved.json');
+    client.attachHost({ host: 'wechat-pc', exportFile });
+    const withHost = await app.inject({ method: 'GET', url: '/api/conversations/g1/export' });
+    expect(withHost.json().savedTo).toBe('/tmp/saved.json');
+    expect(withHost.json().content).toBeUndefined();
+  });
+
+  it('导出不存在的会话回 404', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/conversations/nope/export' });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('非客户端形态下客户端接口回 503 并说明原因', async () => {
+    const plainEngine = createTestEngine(testConfig({ api: { enabled: true, port: 0 } }));
+    const plain = buildServer({ engine: plainEngine, config: plainEngine.config, logger: plainEngine.logger });
+    await plain.ready();
+    try {
+      for (const [method, url] of [
+        ['POST', '/api/ingest'],
+        ['POST', '/api/client/focus'],
+      ] as const) {
+        const response = await plain.inject({ method, url, payload: {} });
+        expect(response.statusCode).toBe(503);
+        expect(response.json().error).toBe('client mode disabled');
+      }
+      const status = await plain.inject({ method: 'GET', url: '/api/client' });
+      expect(status.statusCode).toBe(200);
+      expect(status.json().enabled).toBe(false);
+      expect(status.json().host).toBe('none');
+    } finally {
+      await plain.close();
+    }
   });
 });

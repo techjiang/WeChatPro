@@ -26,6 +26,8 @@ export interface EngineOptions {
   logger?: Logger;
   /** 注入 store（测试用内存库）。 */
   store?: Store;
+  /** 注入客户端宿主句柄；客户端形态下插件靠它做原生通知/角标/导出。 */
+  client?: unknown;
 }
 
 export interface EngineStats {
@@ -105,7 +107,8 @@ export class Engine {
       store: this.store,
       adapters: this.#adapters,
       sendMessage: (conversationId, text) => this.sendMessage(conversationId, text),
-    };
+      ...(options.client ? { client: options.client } : {}),
+    } as EngineContext;
   }
 
   get context(): EngineContext {
@@ -190,16 +193,36 @@ export class Engine {
     return false;
   }
 
+  /**
+   * 原始事件入口（公开）。
+   *
+   * 适配器之外还有两类调用方需要它：
+   * - `HostTransport` 在进程内直接投递（跳过 HTTP，也跳过适配器的 `start` 回调绑定）
+   * - 测试要构造任意原始事件，而不必启动一个真适配器
+   *
+   * 保持单一实现是关键：任何绕开它的旁路都会让「归一化/去重/预聚合」出现第二套口径。
+   */
+  async ingestRaw(event: RawEvent): Promise<void> {
+    await this.#onRawEvent(event);
+  }
+
   /** 处理原始事件：只接受 `message` 类事件，其余事件类型直接转发。 */
   async #onRawEvent(event: RawEvent): Promise<void> {
     this.#stats.received += 1;
     if (event.type !== 'message') {
-      // 事件类型由适配器经 normalizeEventType 收敛到有限集合，这里是唯一能保证
-      // 类型安全的位置——非 message 事件直接透传，由对应插件处理。
-      const name = event.type === 'message.revoked' || event.type === 'member.join' || event.type === 'member.leave'
-        ? event.type
-        : null;
-      if (name) this.bus.emit(name, { protocol: event.protocol, payload: event.payload, at: event.receivedAt });
+      // 事件类型由适配器经 `normalizeEventType` 收敛到有限集合。已知的走专用事件，
+      // 未知的走 `raw` 透传——枚举注定追不上所有协议的专属事件，
+      // 直接丢弃会让「好友申请」「群公告变更」这类事件永远无法被插件处理。
+      const payload = { protocol: event.protocol, payload: event.payload, at: event.receivedAt };
+      if (
+        event.type === 'message.revoked' ||
+        event.type === 'member.join' ||
+        event.type === 'member.leave'
+      ) {
+        this.bus.emit(event.type, payload);
+      } else {
+        this.bus.emit('raw', { ...payload, type: event.type });
+      }
       return;
     }
 

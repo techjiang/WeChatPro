@@ -1,7 +1,7 @@
 import { parseConfig, type AppConfig } from '../src/core/config.js';
 import { Engine } from '../src/runtime/engine.js';
 import { Store } from '../src/core/store.js';
-import { registerBuiltinAdapters } from '../src/protocols.js';
+import { registerBuiltinAdapters } from '../src/protocols/index.js';
 import type { NormalizedMessage } from '../src/core/types.js';
 
 /**
