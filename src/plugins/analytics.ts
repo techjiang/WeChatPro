@@ -1,4 +1,6 @@
 import { AnalyticsEngine, lastDays, type TimeRange } from '../analytics/index.js';
+import { buildDigest, previousDayWindow, type DigestWindow } from '../analytics/digest.js';
+import { Scheduler } from '../runtime/scheduler.js';
 import type { EngineContext } from '../core/context.js';
 import type { Plugin } from '../core/plugin.js';
 import type { NormalizedMessage } from '../core/types.js';
@@ -9,29 +11,44 @@ import type { NormalizedMessage } from '../core/types.js';
  * 统计的重活（落库、预聚合）已经在引擎里做完，这个插件只负责
  * 「定时产出报表」与「响应统计指令」。放在插件而不是引擎里，
  * 是为了让不需要报表的部署（比如只做风控）不必承担这部分开销。
+ *
+ * 日报是**主动推送**而非等人来问：群运营的节奏是早上想知道昨天发生了什么，
+ * 而不是自己去翻面板。默认推送时间是本地时区每天 09:00。
  */
 
 export interface AnalyticsPluginOptions {
-  /** 每日报表推送时间（cron 表达式），默认每天 09:00。 */
+  /**
+   * 每日报表推送时间（cron 表达式），默认每天 09:00。
+   *
+   * 用 5 段标准 cron，按**本地时区**解释：群聊活跃度天然按用户所在时区理解，
+   * 用 UTC 会让「昨晚 9 点高峰」在日报里变成凌晨。
+   */
   digestCron?: string;
-  /** 日报默认覆盖天数。 */
+  /** 日报覆盖的天数（1 = 只报昨天）。 */
   digestDays?: number;
-  /** 报表推送到哪个会话；为空则不主动推送。 */
+  /** 日报推送到哪个会话；为空则推送到每个有消息的群自身。 */
   reportConversationId?: string;
+  /** 无消息的群是否也推日报。默认 false。 */
+  digestIncludeEmpty?: boolean;
+  /** 单次最多推送几个群，防止首次运行时一次性刷屏。 */
+  digestMaxConversations?: number;
+  /** 是否启用日报调度。默认跟随 `analytics.enabled`。 */
+  digestEnabled?: boolean;
 }
 
 export function createAnalyticsPlugin(): Plugin {
   let engine: AnalyticsEngine | null = null;
+  let scheduler: Scheduler | null = null;
+  let options: AnalyticsPluginOptions = {};
 
   return {
     manifest: {
       name: 'analytics',
-      description: '群聊统计：活跃度、热力图、趋势、词频、成员画像',
+      description: '群聊统计：活跃度、热力图、趋势、词频、成员画像、定时日报',
     },
-    setup(context: EngineContext, options: Record<string, unknown>): void {
-      const config = options as AnalyticsPluginOptions;
+    setup(context: EngineContext, raw: Record<string, unknown>): void {
+      options = raw as AnalyticsPluginOptions;
       engine = new AnalyticsEngine(context.store, context.config.analytics.hourlyBuckets);
-      void config;
       context.logger.debug({ buckets: context.config.analytics.hourlyBuckets }, '统计插件已配置');
     },
     subscriptions(context) {
@@ -58,7 +75,85 @@ export function createAnalyticsPlugin(): Plugin {
             context.logger.debug({ err: payload }, '统计插件观察到引擎错误');
           },
         },
+        {
+          event: 'command' as const,
+          handle: (payload) => {
+            // `/日报`：不想等早上九点，现在就要一份。
+            const command = payload as {
+              intent?: string;
+              question?: string;
+              conversationId?: string;
+              reply: (text: string) => void;
+            };
+            if (command.intent !== 'stats') return;
+            if (!/日报|digest/i.test(command.question ?? '')) return;
+            const report = buildDigest(context.store, command.conversationId ?? '', previousDayWindow(), {
+              includeEmpty: true,
+            });
+            command.reply(report && report.text ? report.text : '昨日无消息。');
+          },
+        },
       ];
+    },
+    /**
+     * 启动日报调度。
+     *
+     * 放在 `start()` 而不是 `setup()`：`setup()` 只保证依赖注入完成，
+     * 此时引擎可能还没起、适配器还没绑，日报发出去会「成功」但正文是空的。
+     * 放在 `start()` 才能确保发送通道已经就绪。
+     */
+    start(context: EngineContext): void {
+      const enabled = options.digestEnabled ?? context.config.analytics.enabled;
+      if (!enabled) {
+        context.logger.debug('日报调度未启用（analytics.enabled 为 false 或显式关闭）');
+        return;
+      }
+      // 优先级：插件私有 options > 顶层 analytics 配置 > 内置默认。
+      // 顶层是「运维一眼能找到」的位置，options 留给需要按环境覆盖的部署。
+      const expression = options.digestCron ?? context.config.analytics.digestCron;
+      const days = Math.max(1, options.digestDays ?? context.config.analytics.digestDays);
+      const configuredTarget = options.reportConversationId ?? context.config.analytics.digestConversationId;
+      scheduler = new Scheduler(context.logger);
+
+      const window: (now: number) => DigestWindow =
+        days === 1
+          ? previousDayWindow
+          : (now) => ({ range: lastDays(days, now), label: `最近 ${days} 天` });
+
+      scheduler.add({
+        name: 'analytics-daily-digest',
+        expression,
+        run: async () => {
+          const target = configuredTarget || undefined;
+          const ids = target
+            ? [target]
+            : context.store
+                .listConversations()
+                .map((row) => row.id)
+                .slice(0, options.digestMaxConversations ?? context.config.analytics.digestMaxConversations);
+          const resolved = window(Date.now());
+          let sent = 0;
+          for (const conversationId of ids) {
+            const report = buildDigest(context.store, conversationId, resolved, {
+              includeEmpty: options.digestIncludeEmpty ?? context.config.analytics.digestIncludeEmpty,
+            });
+            if (!report || report.totalMessages === 0) continue;
+            const delivered = await context.sendMessage(
+              target ?? conversationId,
+              target ? `【${report.conversationName}】
+${report.text}` : report.text,
+            );
+            // 发送失败不抛错：一个群发不出去不该让整个任务记成失败而影响别的群。
+            if (delivered) sent += 1;
+            else context.logger.warn({ conversationId }, '日报发送失败（适配器不支持主动发送或发送通道报错）');
+          }
+          context.logger.info({ sent, label: resolved.label, conversations: ids.length }, '日报推送完成');
+        },
+      });
+    },
+    stop(): void {
+      scheduler?.stop();
+      scheduler = null;
     },
   };
 }

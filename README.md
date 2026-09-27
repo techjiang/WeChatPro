@@ -26,11 +26,12 @@ WeChatPro 是一个**微信 PC 客户端插件**。引擎嵌在客户端进程�
 | 模块 | 能力 |
 | --- | --- |
 | **群聊统计** | 活跃度报表、24×7 时段热力图、活跃度趋势（升降判定）、词频话题、成员画像与生命周期分层 |
+| **群日报** | 每天定时把「昨天」的排行、话题、风控事件、成员变动推回群里；cron 与推送目标可配 |
 | **自动化检测** | 敏感词、广告导流、刷屏、重复内容、@ 轰炸、媒体刷屏、深夜扰民、自定义词表；滑动窗口风险分累计 |
 | **AI 助手** | 群聊摘要（分段+归并）、群内检索问答（RAG）、语义审核、群知识自动沉淀 |
 | **信息管理** | 群档案、成员台账、群知识库、数据留存策略、档案导出迁移 |
 | **客户端集成** | 原生通知、入口角标、面板唤起、文件对话框、剪贴板、原生发送 |
-| **控制台** | 客户端内嵌面板（9 个视图，单文件零依赖）+ REST API + CLI |
+| **控制台** | 客户端内嵌面板（10 个视图，单文件零依赖，含运行自检）+ REST API + CLI |
 
 ## 快速开始
 
@@ -169,6 +170,7 @@ registerAdapter('my-protocol', async (options, deps) => ({
 /总结 [今天|本周]                 AI 群聊摘要
 /ask <问题>                       基于群内记录问答
 /规则                            查看生效的检测规则
+/统计 日报                        立即生成一份昨日日报（与定时推送同一段渲染）
 /面板                             在微信客户端里打开 WeChatPro 面板   ← 客户端形态
 /导出                             导出群档案（宿主弹保存框）          ← 客户端形态
 help / 帮助                        指令菜单
@@ -189,6 +191,7 @@ help / 帮助                        指令菜单
 | `WECHATPRO_API_HOST` / `WECHATPRO_API_PORT` / `WECHATPRO_API_TOKEN` | 控制台监听与鉴权 |
 | `WECHATPRO_AI_ENABLED` / `WECHATPRO_AI_API_KEY` / `WECHATPRO_AI_BASE_URL` / `WECHATPRO_AI_MODEL` | AI 接入 |
 | `WECHATPRO_CLIENT_ENABLED` / `WECHATPRO_CLIENT_HOST` | 开启 PC 客户端形态 |
+| `WECHATPRO_DIGEST_CRON` | 群日报推送时间（cron，本地时区） |
 | `WECHATPRO_HOST_SHELL` | 客户端插件壳模块路径（`client` 命令据此加载宿主能力） |
 | `WECHATPRO_HOST_NAME` / `WECHATPRO_HOST_VERSION` / `WECHATPRO_PLUGIN_VERSION` | 宿主标识，写进 `/api/client` |
 
@@ -214,6 +217,7 @@ help / 帮助                        指令菜单
 | POST | `/api/conversations/:id/ask` | 群内问答 |
 | GET | `/api/rules` | 生效的检测规则 |
 | GET | `/api/stats` | 引擎统计 |
+| GET | `/api/health/deep` | **深度自检**：探针实测注入链路 + 一句可照做的结论 |
 | POST | `/api/ingest` | **宿主注入消息**（接受微信原生字段，支持单条与批量） |
 | GET | `/api/client` | **宿主状态**：身份、可用能力、调用统计、品牌信息 |
 | POST | `/api/client/focus` | **让宿主拉起面板**并清角标 |
@@ -232,6 +236,7 @@ node dist/cli.js doctor [--json]                   环境自检
 node dist/cli.js import <file|-> [options]         导入聊天导出文本 / 宿主 JSON
 node dist/cli.js brand [--json]                    品牌信息与资源状态
 node dist/cli.js report <conversationId> [--days 7] 统计报表
+node dist/cli.js digest [conversationId] [--days 1]  群日报（定时推送的就是它）
 node dist/cli.js conversations                      会话列表
 node dist/cli.js members <conversationId>           成员台账
 node dist/cli.js knowledge <conversationId>         群知识库
@@ -259,6 +264,8 @@ node dist/cli.js adapters | plugins                 已注册的适配器 / 插�
         ├── command     指令路由
         └── client      原生通知 / 角标 / 面板唤起   ← 客户端形态
         ▼
+Scheduler                                cron → 群日报主动推送
+        ▼
 SQLite (WAL)                             窄表 + 覆盖索引 + 预聚合
         ▼
 客户端内嵌面板 / HTTP API / CLI
@@ -271,7 +278,7 @@ SQLite (WAL)                             窄表 + 覆盖索引 + 预聚合
 
 ```bash
 npm run typecheck   # 类型检查
-npm test            # 189 个测试
+npm test            # 244 个测试
 npm run build       # 编译到 dist/
 npm run dev         # tsx watch 热重载
 
@@ -291,6 +298,7 @@ npm i -D sharp && npx tsx scripts/brand-assets.ts brand/logo-source.png
 - [`docs/architecture.md`](./docs/architecture.md) — 架构与关键设计取舍
 - [`docs/configuration.md`](./docs/configuration.md) — 配置项详解
 - [`docs/guard-rules.md`](./docs/guard-rules.md) — 检测规则与自定义方式
+- [`docs/digest.md`](./docs/digest.md) — 群日报：时间、口径、推送目标、排障
 - [`docs/deployment.md`](./docs/deployment.md) — 部署与运维
 - [`brand/README.md`](./brand/README.md) — 品牌资源与图标生成
 - [`examples/`](./examples) — 可直接运行的示例

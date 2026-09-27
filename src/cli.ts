@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { bootstrap, loadConfig, builtinPlugins } from './runtime/bootstrap.js';
 import { AnalyticsEngine, lastDays } from './analytics/index.js';
+import { buildDigest, previousDayWindow } from './analytics/digest.js';
+import { hostDropStats } from './runtime/bootstrap.js';
 import { GroupManager } from './manage/index.js';
 import { renderReport } from './plugins/analytics.js';
 import { Store } from './core/store.js';
@@ -30,6 +32,7 @@ const USAGE = `WeChatPro — 微信社群智能引擎（PC 客户端内直接使
   wechatpro doctor [--config <path>]             环境自检：配置/数据/宿主能力/资源
   wechatpro import <text|json> [options]         导入聊天导出文本或宿主 JSON
   wechatpro report <conversationId> [options]    输出群聊统计报表
+  wechatpro digest [conversationId] [--days 1]   生成群日报（定时推送的内容就是它）
   wechatpro conversations [--config <path>]      列出已知会话
   wechatpro members <conversationId>             列出群成员台账
   wechatpro knowledge <conversationId>           查看群知识库
@@ -74,6 +77,8 @@ async function main(argv: string[]): Promise<number> {
       return brandCommand(flags);
     case 'report':
       return reportCommand(flags);
+    case 'digest':
+      return digestCommand(flags);
     case 'conversations':
       return conversationsCommand(flags);
     case 'members':
@@ -225,12 +230,55 @@ function detectShell(): ClientShellApi | null {
   if (!shellPath) return null;
   // 客户端注入的模块路径由宿主提供，只能动态解析；这里用 require 兼容 CJS 插件壳。
   try {
-    const resolved = shellPath.startsWith('.') ? new URL(shellPath, `file://${process.cwd()}/`).pathname : shellPath;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const loaded = require(resolved) as { shell?: ClientShellApi } & ClientShellApi;
-    return loaded.shell ?? loaded;
+    return loadShell(shellPath);
   } catch (error) {
     process.stderr.write(`警告：客户端壳加载失败（${shellPath}）：${error instanceof Error ? error.message : error}\n`);
+    return null;
+  }
+}
+
+/**
+ * 从路径加载插件壳。
+ *
+ * 抽出来是因为 `client` 命令与 `doctor` 都要用它——两处各写一份的话，
+ * 「自检说能加载、启动却加载不了」这类差异会长期存在且没人发现。
+ */
+function loadShell(shellPath: string): ClientShellApi | null {
+  const resolved = shellPath.startsWith('.') ? new URL(shellPath, `file://${process.cwd()}/`).pathname : shellPath;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const loaded = require(resolved) as { shell?: ClientShellApi } & ClientShellApi;
+  return loaded.shell ?? loaded;
+}
+
+/**
+ * 校验 cron 表达式。
+ *
+ * 直接用调度器自己的校验函数，避免「`doctor` 说没问题、启动时却被跳过」
+ * 这种两套口径的问题。延迟 require 是为了不在 CLI 未用到时也加载调度器。
+ */
+function validateCron(expression: string): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const cron = require('node-cron') as { validate(value: string): boolean };
+    return cron.validate(expression);
+  } catch {
+    // 依赖缺失时不该把自检判成失败：这不是用户配置的问题。
+    return true;
+  }
+}
+
+/** 当日已入库消息数；库打不开时返回 null（自检本身不能因此崩掉）。 */
+function digestTodayCount(config: { storage: { sqlitePath: string; wal: boolean } }): number | null {
+  try {
+    const store = new Store({ path: config.storage.sqlitePath, wal: config.storage.wal });
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const row = store.db
+      .prepare(`SELECT COUNT(*) AS count FROM messages WHERE ts >= ?`)
+      .get(start.getTime()) as { count: number };
+    store.close();
+    return row.count;
+  } catch {
     return null;
   }
 }
@@ -315,15 +363,71 @@ async function doctorCommand(flags: Flags): Promise<number> {
     });
   }
 
-  const gateway = new HostGateway();
-  const caps = gateway.capabilities();
+  // 客户端宿主能力探测。
+  //
+  // 这一步刻意「不配壳也能看」：早期版本在没有注入环境时把结论标成 `✗`，
+  // 而下面几项都是 `✓`，看起来像环境坏了。实际上「没注入」是一个合法状态
+  // （引擎与面板照常工作，只是缺原生通知这类增强能力），
+  // 所以改成「探测到了才检查，没探测到就说明降级范围」。
+  const shellPath = process.env.WECHATPRO_HOST_SHELL;
+  if (!shellPath) {
+    checks.push({
+      name: '客户端宿主',
+      ok: true,
+      detail: `未注入插件壳（合法状态）：引擎与面板可用，原生通知/角标/文件对话框会降级跳过`,
+      hint: '要在微信客户端内使用，让插件壳导出 WECHATPRO_HOST_SHELL=<shell 模块路径> 后运行 `wechatpro client`',
+    });
+  } else {
+    try {
+      const shell = loadShell(shellPath);
+      const bridge = shell ? bridgeFromShell(shell, { host: process.env.WECHATPRO_HOST_NAME ?? 'wechat-pc' }) : null;
+      const gateway = new HostGateway();
+      if (bridge) gateway.attach(bridge);
+      const caps = gateway.capabilities();
+      checks.push({
+        name: '客户端宿主',
+        ok: Boolean(bridge) && caps.length > 0,
+        detail: bridge
+          ? `已注入 ${bridge.host}｜能力 ${caps.length}/${HOST_CAPABILITIES.length}：${caps.join(', ') || '（无）'}`
+          : `插件壳加载失败：${shellPath}`,
+        ...(bridge && caps.length === 0
+          ? { hint: '插件壳没挂任何能力：确认它实现的方法名与 ClientShellApi 一致，未实现的能力不要写成空函数' }
+          : {}),
+      });
+    } catch (error) {
+      checks.push({
+        name: '客户端宿主',
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+        hint: '插件壳模块需可被 Node 加载（CJS/ESM 均可），且需能从进程中读到',
+      });
+    }
+  }
+
+  // 注入被拒计数：宿主最容易踩的坑是「发出去了但没进库」，症状与「没发」无法区分。
+  const drops = hostDropStats();
+  const dropped = Object.values(drops).reduce((sum, count) => sum + count, 0);
   checks.push({
-    name: '客户端宿主',
-    ok: Boolean(process.env.WECHATPRO_HOST_SHELL),
-    detail: process.env.WECHATPRO_HOST_SHELL
-      ? `已注入：${process.env.WECHATPRO_HOST_SHELL}`
-      : `未检测到注入环境；可用能力 ${caps.length}/${HOST_CAPABILITIES.length}`,
-    hint: '插件壳设置 WECHATPRO_HOST_SHELL 后重跑，可用 `wechatpro client` 启动',
+    name: '注入健康',
+    ok: dropped === 0,
+    detail:
+      dropped === 0
+        ? '本进程未发现被拒的注入'
+        : `被拒 ${dropped} 条：${Object.entries(drops)
+            .map(([reason, count]) => `${reason}×${count}`)
+            .join('、')}`,
+    hint: 'unmapped 表示载荷缺会话/发送者字段，核对下发的字段名与 mapping',
+  });
+
+  checks.push({
+    name: '日报调度',
+    ok: validateCron(config.analytics.digestCron),
+    detail: validateCron(config.analytics.digestCron)
+      ? `${config.analytics.digestCron}（本地时区）｜覆盖 ${config.analytics.digestDays} 天｜当日消息 ${
+          digestTodayCount(config) === null ? '待运行时统计' : digestTodayCount(config)
+        }`
+      : `cron 表达式非法：${config.analytics.digestCron}`,
+    hint: '5 段标准 cron，如 `0 9 * * *` 表示每天 09:00；写错只会在日志里警告，不会阻塞启动',
   });
 
   const icon = brandIcon();
@@ -455,6 +559,48 @@ async function openReadonlyStore(flags: Flags): Promise<{ store: Store; close: (
   const path = flags.db ?? config.storage.sqlitePath;
   const store = new Store({ path, wal: config.storage.wal });
   return { store, close: () => store.close() };
+}
+
+/**
+ * 生成群日报。
+ *
+ * 与「早上九点自动推」用的是**同一个** `buildDigest`，所以这个命令可以
+ * 直接用来核对「定时推送的内容到底是什么样」——不需要等到第二天早上，
+ * 也不必去猜调度有没有生效。
+ */
+async function digestCommand(flags: Flags): Promise<number> {
+  const { store, close } = await openReadonlyStore(flags);
+  try {
+    const days = flags.days;
+    const window = days === 1 ? previousDayWindow() : { range: lastDays(days), label: `最近 ${days} 天` };
+    const requested = flags.positionals[0];
+    const ids = requested
+      ? [requested]
+      : store.listConversations().map((row) => row.id);
+
+    if (ids.length === 0) {
+      process.stdout.write('暂无会话数据，没有可生成的日报。\n');
+      return 0;
+    }
+
+    let produced = 0;
+    for (const conversationId of ids) {
+      const report = buildDigest(store, conversationId, window, { includeEmpty: true });
+      if (!report) {
+        if (requested) {
+          process.stderr.write(`未找到会话 ${conversationId}，可用 conversations 命令查看。\n`);
+          return 1;
+        }
+        continue;
+      }
+      produced += 1;
+      process.stdout.write(report.text ? report.text + '\n\n' : `${report.conversationName}：${window.label} 无消息。\n`);
+    }
+    if (produced === 0) process.stdout.write('没有可生成的日报。\n');
+    return 0;
+  } finally {
+    close();
+  }
 }
 
 async function reportCommand(flags: Flags): Promise<number> {

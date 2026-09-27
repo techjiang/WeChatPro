@@ -33,7 +33,8 @@ export type {
   OutboundMessage,
 } from './core/types.js';
 
-export { registerAdapter, listAdapterProtocols, pick, toMillis } from './core/registry.js';
+export { registerAdapter, listAdapterProtocols, pick, toMillis, normalizeEventType } from './core/registry.js';
+export type { RawEventType } from './core/registry.js';
 export { registerBuiltinAdapters, setHostProvider } from './protocols/index.js';
 export {
   buildMockAdapter,
@@ -44,6 +45,11 @@ export {
   WECHAT_KIND_ALIASES,
   coerceHostKind,
   parseChatExport,
+  describeUnmapped,
+  selfTestPayload,
+  mapPayload,
+  toStringList,
+  isOutbound,
 } from './protocols/index.js';
 export type { HostAdapterOptions, HostIngestPayload, IngestResult } from './protocols/index.js';
 
@@ -63,6 +69,10 @@ export { BRAND, BRAND_COLORS, brandIcon, asciiBanner } from './client/brand.js';
 export { createClientPlugin } from './plugins/client.js';
 
 export { AnalyticsEngine, topWordsOf, lastDays, DAY_MS, HOUR_MS } from './analytics/index.js';
+export { buildDigest, previousDayWindow, formatDay, ruleIdOf, reasonOf } from './analytics/digest.js';
+export type { DigestReport, DigestWindow } from './analytics/digest.js';
+export { Scheduler, createDigestJob } from './runtime/scheduler.js';
+export type { ScheduledJob, JobStatus } from './runtime/scheduler.js';
 export type {
   ActivityReport,
   HeatmapReport,
@@ -89,7 +99,7 @@ export type { KnowledgeEntry, MemberLifecycle, GroupDigest } from './manage/inde
 
 export { buildServer } from './api/server.js';
 
-export { createAnalyticsPlugin } from './plugins/analytics.js';
+export { createAnalyticsPlugin, renderReport, renderSparkline } from './plugins/analytics.js';
 export { createAiPlugin } from './plugins/ai.js';
 export { createCommandPlugin, extractCommand } from './plugins/command.js';
 export { createGuardPlugin } from './plugins/guard.js';

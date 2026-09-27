@@ -37,6 +37,15 @@ main:
           # 这是「在微信里能不能真的用」的最小可信证据，且刻意走编译产物，
           # 能发现「源码测试还绿、编译后却坏了」的问题。
           script: node scripts/smoke-client.mjs
+        - name: verify-digest
+          # 日报是唯一「主动推」的功能，出错时没人会立刻发现（只是某天不来了）。
+          # 用固定时间跑一次，断言正文包含真实统计数字。
+          script: node scripts/verify-digest.mjs
+        - name: verify-dashboard
+          # 视图渲染的静态契约：热力图列数、渲染器与导航一一对应。
+          # 「面板错位」「点进去是未知视图」这类问题只在浏览器里肉眼可见，
+          # 而 CI 里没人盯——所以把契约固化成断言。
+          script: node scripts/verify-dashboard.mjs
   pull_request:
     - name: check
       docker:
@@ -61,3 +70,7 @@ main:
           script: node scripts/verify-panel.mjs /tmp/panel.html
         - name: verify-client
           script: node scripts/smoke-client.mjs
+        - name: verify-digest
+          script: node scripts/verify-digest.mjs
+        - name: verify-dashboard
+          script: node scripts/verify-dashboard.mjs

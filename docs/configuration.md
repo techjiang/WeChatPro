@@ -123,6 +123,38 @@ node dist/cli.js check --config config.json   # 校验配置并打印解析结�
 | `includeConversations` | `[]` | 参与统计的会话白名单，空为全部 |
 | `stopWords` | `[]` | 词频统计丢弃的停用词 |
 | `hourlyBuckets` | `24` | 时段桶粒度，24 表示按自然小时 |
+| `digestCron` | `0 9 * * *` | **群日报推送时间**（5 段 cron，本地时区） |
+| `digestDays` | `1` | 日报覆盖天数，1 表示只报昨天 |
+| `digestConversationId` | `''` | 日报统一推送到该会话（如管理员群）；空则各自推回本群 |
+| `digestIncludeEmpty` | `false` | 无消息的群是否也推日报 |
+| `digestMaxConversations` | `50` | 单次最多推送的群数，防止首次运行刷屏 |
+
+### 群日报
+
+日报是引擎**唯一的主动推送**，默认每天 09:00（本地时区）把「昨天」的
+活跃度、发言排行、类型分布、时段分布、热门话题、风控事件、成员变动推回群里。
+
+几个刻意的取舍：
+
+- **按自然日而不是「最近 24 小时」**：群主理解「昨天」就是 0 点到 0 点，
+  滚动窗口会让早上的日报混入昨天傍晚与今天凌晨两段时间，读起来对不上号。
+- **本地时区**：统一成 UTC 会让「昨晚 9 点高峰」在日报里显示成凌晨。
+- **默认跳过空群**：不加这个开关，一个 30 群的账号每天早上会收到 30 条
+  「昨日无消息」，用户第一件事就是关掉日报。
+- **失败逐条记账**：某个群发送失败只记 `failed`，不影响其他群，
+  也不会让整个定时任务被标记为失败。
+
+不想等到第二天早上，可以直接看当前会产出什么：
+
+```bash
+node dist/cli.js digest                    # 全部会话的昨日日报
+node dist/cli.js digest <id> --days 7      # 指定会话、最近 7 天
+```
+
+群里也可以直接问：`/统计 日报`（与定时推送用的是同一段渲染代码）。
+
+> cron 表达式写错时会在日志里告警并**跳过**该任务，不会让引擎起不来；
+> `wechatpro doctor` 的「日报调度」一项会给出校验结论。
 
 ## guard
 
@@ -189,7 +221,7 @@ node dist/cli.js check --config config.json   # 校验配置并打印解析结�
 | --- | --- |
 | `command` | `prefix`（默认 `/`）、`aliases`（默认 `["机器人","bot","小助手"]`）、`bareCommands`（默认 `["help","帮助","菜单","指令"]`）、`replyOnUnknown`（默认 `true`） |
 | `guard` | `autoActions`（默认 `false`）、`actionTargets`、`useAi`（默认 `false`）、`aiPolicy` |
-| `analytics` | `digestCron`、`digestDays`、`reportConversationId` |
+| `analytics` | `digestCron`、`digestDays`、`reportConversationId`、`digestIncludeEmpty`、`digestMaxConversations`、`digestEnabled` |
 | `ai` | `triggers`、`autoKnowledge`、`knowledgeMinChars` |
 
 ## 环境变量覆盖
@@ -201,5 +233,6 @@ node dist/cli.js check --config config.json   # 校验配置并打印解析结�
 | `WECHATPRO_API_HOST` / `WECHATPRO_API_PORT` / `WECHATPRO_API_TOKEN` | `api.*` |
 | `WECHATPRO_AI_ENABLED` | `ai.enabled`（`true` 才开启） |
 | `WECHATPRO_AI_API_KEY` / `WECHATPRO_AI_BASE_URL` / `WECHATPRO_AI_MODEL` | `ai.*` |
+| `WECHATPRO_DIGEST_CRON` | `analytics.digestCron` |
 
 只覆盖「部署强相关」字段；业务规则仍走配置文件，避免配置散落两处。

@@ -16,15 +16,32 @@ const adapterSchema = z.object({
   options: z.record(z.string(), z.unknown()).prefault({}),
 });
 
-const analyticsSchema = z.object({
-  enabled: z.boolean().default(true),
-  /** 参与统计的会话白名单；为空表示全部群聊。 */
-  includeConversations: z.array(z.string()).default([]),
-  /** 词频统计时丢弃的高频停用词。 */
-  stopWords: z.array(z.string()).default([]),
-  /** 每小时热力图的桶数，24 表示按自然小时。 */
-  hourlyBuckets: z.number().int().min(1).max(168).default(24),
-});
+const analyticsSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** 参与统计的会话白名单；为空表示全部群聊。 */
+    includeConversations: z.array(z.string()).default([]),
+    /** 词频统计时丢弃的高频停用词。 */
+    stopWords: z.array(z.string()).default([]),
+    /** 每小时热力图的桶数，24 表示按自然小时。 */
+    hourlyBuckets: z.number().int().min(1).max(168).default(24),
+    /**
+     * 群日报推送时间（cron，本地时区）。默认每天 09:00。
+     *
+     * 放在配置顶层而不是插件 options 里：日报是「群运营的基本节律」，
+     * 而不是某个插件的私有开关；写在顶层，`wechatpro check` 也会一并校验。
+     */
+    digestCron: z.string().min(1).default('0 9 * * *'),
+    /** 日报覆盖天数，1 表示只报昨天。 */
+    digestDays: z.number().int().min(1).max(30).default(1),
+    /** 日报统一推送到该会话（如管理员群）；为空则各自推回本群。 */
+    digestConversationId: z.string().default(''),
+    /** 无消息的群是否也推日报，默认否。 */
+    digestIncludeEmpty: z.boolean().default(false),
+    /** 单次最多推送的群数，防止首次运行时一次性刷屏。 */
+    digestMaxConversations: z.number().int().min(1).default(50),
+  })
+  .prefault({});
 
 const guardRuleSchema = z.object({
   id: z.string().min(1),
@@ -179,5 +196,6 @@ export function applyEnvOverrides(config: AppConfig, env: NodeJS.ProcessEnv = pr
   if (env.WECHATPRO_AI_ENABLED) next.ai.enabled = env.WECHATPRO_AI_ENABLED === 'true';
   if (env.WECHATPRO_CLIENT_ENABLED) next.client.enabled = env.WECHATPRO_CLIENT_ENABLED === 'true';
   if (env.WECHATPRO_CLIENT_HOST) next.client.host = env.WECHATPRO_CLIENT_HOST;
+  if (env.WECHATPRO_DIGEST_CRON) next.analytics.digestCron = env.WECHATPRO_DIGEST_CRON;
   return next;
 }

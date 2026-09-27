@@ -4,7 +4,7 @@ import { AnalyticsEngine, DAY_MS, lastDays } from '../analytics/index.js';
 import { GroupManager } from '../manage/index.js';
 import { renderReport } from '../plugins/analytics.js';
 import { renderPanel } from '../client/panel.js';
-import { BRAND } from '../client/brand.js';
+import { BRAND, brandIcon } from '../client/brand.js';
 import type { AppConfig } from '../core/config.js';
 import type { Engine } from '../runtime/engine.js';
 import type { AiService } from '../ai/index.js';
@@ -64,6 +64,58 @@ export function buildServer(options: ApiServerOptions): FastifyInstance {
     aiEnabled: Boolean(options.ai?.enabled),
     now: Date.now(),
   }));
+
+  /**
+   * 深度健康检查：把「消息到底进没进来」这件事变成一条可读结论。
+   *
+   * 宿主插件最常见的故障是「注入了消息但面板没变化」，而
+   * 「消息全丢」「消息进来了但没落库」「落库了但没选中那个群」在浅层
+   * `/health` 上长得一模一样。这里用一条**不落库**的自检消息探一遍
+   * 完整注入链路（`eventType: 'selftest'` 不是 `message`，引擎不会写库），
+   * 并把注入计数、数据提示一起给出来。
+   *
+   * 探针不走消息表，所以它不会污染统计——这一点很重要，
+   * 否则每次自检都会让「昨天消息数 +1」。
+   */
+  app.get('/api/health/deep', async () => {
+    const transport = options.client?.adapter.transport;
+    const probe = transport ? await transport.probe() : { accepted: false, reason: 'transport-off', latencyMs: 0 };
+    const conversations = engine.store.listConversations();
+    const totalMessages = conversations.reduce((sum, row) => sum + row.message_count, 0);
+
+    // 结论按「下一步该做什么」排序，而不是按技术层次：
+    // 排障的人只想知道该改哪一处。
+    let verdict: string;
+    if (!options.client) verdict = '当前不是客户端形态：宿主动作不适用，面板数据来自 HTTP 推送或导入';
+    else if (!probe.accepted) verdict = `注入链路不通（${probe.reason}）：确认引擎已 start()，且适配器列表里有 host`;
+    else if (transport && transport.rejected > 0)
+      verdict = `注入链路正常，但有 ${transport.rejected} 条载荷无法映射：核对字段名（StrTalker/StrSender）或配置 mapping`;
+    else if (totalMessages === 0) verdict = '注入链路正常，但还没有消息入库：让客户端投一条真实消息再刷新';
+    else verdict = '一切正常：注入链路通、消息已入库、面板可直接使用';
+
+    return {
+      ok: probe.accepted,
+      verdict,
+      probe: {
+        accepted: probe.accepted,
+        reason: probe.reason ?? null,
+        latencyMs: probe.latencyMs,
+      },
+      transport: transport
+        ? {
+            bound: transport.bound,
+            received: transport.received,
+            dropped: transport.dropped,
+            rejected: transport.rejected,
+            lastRejected: transport.lastRejected,
+          }
+        : null,
+      data: { conversations: conversations.length, totalMessages },
+      engine: engine.stats,
+      host: { enabled: Boolean(options.client), capabilities: options.client?.capabilities() ?? [] },
+      now: Date.now(),
+    };
+  });
 
   app.get('/api/conversations', async () => ({
     items: manager.listConversations().map((row) => ({
@@ -389,12 +441,17 @@ export function assertSafeBinding(config: AppConfig): void {
  * 页面必须能离线打开。数据全部走同源 `/api/*`。
  */
 function renderConsole(): string {
+  // 图标同样内联：浏览器会自动请求 /favicon.ico，没有它控制台每次打开都有一条
+  // 404 噪音（排查真实问题时最容易被这条噪声带偏）。客户端面板早已内联，
+  // 这里补齐，两个界面在这一点上保持一致。
+  const icon = brandIcon();
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WeChatPro 控制台</title>
+${icon ? `<link rel="icon" href="${icon}">` : ''}
 <style>
   :root { color-scheme: light dark; --bg:#0f1115; --panel:#181b22; --line:#272b34; --fg:#e6e8ee; --muted:#8b93a7; --accent:#4f8cff; --warn:#ffb020; --danger:#ff5d5d; }
   * { box-sizing: border-box; }
@@ -415,7 +472,14 @@ function renderConsole(): string {
   .card { background:#141821; border:1px solid var(--line); border-radius:8px; padding:10px; }
   .card .k { color:var(--muted); font-size:12px; }
   .card .v { font-size:20px; font-weight:600; margin-top:2px; }
-  .heat { display:grid; grid-template-columns:repeat(24, 1fr); gap:2px; }
+  /* 标签必须换行排布：少了这条，「热门话题」会挤成一长串没有间隙的文字，
+     看起来像被截断，实际是标签之间没有视觉分隔。 */
+  .tags { display:flex; gap:6px; flex-wrap:wrap; }
+  .tag { background:#1c2029; border:1px solid var(--line); border-radius:999px; padding:2px 9px; font-size:12px; color:var(--muted); white-space:nowrap; }
+  /* 7 行 × 24 列，与渲染顺序严格一致；加一行列头后总行数是 8，
+     这里用 25 列（1 个行标签 + 24 小时）与表头对齐。 */
+  .heat { display:grid; grid-template-columns:16px repeat(24, 1fr); gap:2px; }
+  .heat .hd { font-size:9px; color:var(--muted); text-align:center; }
 
   .cell { aspect-ratio:1; border-radius:2px; background:#1c2029; }
   .bars { display:grid; gap:6px; }
@@ -481,7 +545,10 @@ async function loadConversations() {
     el.className = 'conv' + (index === 0 ? ' active' : '');
     el.innerHTML = '<div class="name"></div><div class="sub"></div>';
     el.querySelector('.name').textContent = item.name;
-    el.querySelector('.sub').textContent = item.messageCount + ' 条 · ' + item.memberCount + ' 人 · ' + fmt(item.lastSeenAt);
+    // 成员数来自宿主载荷，协议不提供时是 null。直接拼进 DOM 会显示成「null 人」，
+    // 用户会以为数据坏了；这里退化成「- 人」，并保留消息数这个始终可信的量。
+    el.querySelector('.sub').textContent = item.messageCount + ' 条 · ' +
+      (item.memberCount == null ? '-' : item.memberCount) + ' 人 · ' + fmt(item.lastSeenAt);
     el.onclick = () => { current = item.id; document.querySelectorAll('.conv').forEach((n) => n.classList.remove('active')); el.classList.add('active'); refresh(); };
     box.appendChild(el);
   });
@@ -522,7 +589,11 @@ function renderHeat(h) {
   const max = Math.max(1, ...h.cells.map((c) => c.count));
   const box = document.getElementById('heat');
   box.innerHTML = '';
+  // 列头 + 行标签：热力图没有坐标会被读成「一堆方块」，尤其是客户端右侧栏那种窄宽度。
+  box.insertAdjacentHTML('beforeend', '<div></div>' +
+    Array.from({ length: 24 }, (_, hour) => '<div class="hd">' + hour + '</div>').join(''));
   for (let w = 0; w < 7; w++) {
+    box.insertAdjacentHTML('beforeend', '<div class="hd">' + WEEKDAYS[w].slice(1) + '</div>');
     for (let hour = 0; hour < 24; hour++) {
       const count = grid.get(w + ':' + hour) || 0;
       const cell = document.createElement('div');
@@ -544,7 +615,10 @@ function renderTop(a) {
 }
 
 function renderTopics(t) {
-  document.getElementById('topics').innerHTML = t.words.slice(0, 24).map((w) =>
+  // 词频是 2-gram 口径（见 docs/architecture.md），单看某个 2-gram 没有意义，
+  // 但把前 N 个连起来就能看出话题倾向。这里只取前 18 个并保持换行，
+  // 避免窄屏下堆成一片无法阅读的文字墙。
+  document.getElementById('topics').innerHTML = t.words.slice(0, 18).map((w) =>
     '<span class="tag">' + esc(w.word) + ' · ' + w.count + '</span>').join('') || '<p class="muted">暂无数据</p>';
 }
 

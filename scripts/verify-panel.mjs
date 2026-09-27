@@ -40,7 +40,7 @@ report(cdnRefs.length === 0, `出现 CDN 资源引用: ${cdnRefs.slice(0, 3).joi
 report(html.includes('data:image/png;base64,'), 'Logo 未内联为 data URL');
 
 // 九个视图都要在：少了任何一个，用户点进去就是「未知视图」。
-for (const view of ['dashboard', 'activity', 'heatmap', 'members', 'guard', 'knowledge', 'ai', 'rules', 'about']) {
+for (const view of ['dashboard', 'activity', 'heatmap', 'members', 'guard', 'knowledge', 'ai', 'rules', 'health', 'about']) {
   report(html.includes(`'${view}'`), `缺少视图 ${view}`);
 }
 
@@ -50,4 +50,4 @@ if (problems.length > 0) {
 }
 
 const kb = (statSync(path).size / 1024).toFixed(0);
-process.stdout.write(`面板校验通过：${kb} KB 单文件，零外部依赖，9 个视图齐全\n`);
+process.stdout.write(`面板校验通过：${kb} KB 单文件，零外部依赖，10 个视图齐全\n`);

@@ -6,6 +6,7 @@
 | [architecture.md](./architecture.md) | 架构分层与关键设计取舍：为什么用预聚合、为什么默认不自动处罚、为什么不上向量库 |
 | [configuration.md](./configuration.md) | 配置项逐条说明与默认值 |
 | [guard-rules.md](./guard-rules.md) | 8 条内置检测规则的行为、阈值调优、自定义词表 |
+| [digest.md](./digest.md) | **群日报**：推送时间、覆盖口径、推送目标、排障 |
 | [deployment.md](./deployment.md) | 部署形态、数据备份、留存策略、安全注意 |
 
 其它：
@@ -23,4 +24,5 @@
 | 客户端没提供某个 API | [pc-client.md § 宿主能力与降级](./pc-client.md#五宿主能力与降级) |
 | 插件装了但没反应 | [pc-client.md § 排障](./pc-client.md#九排障) → 先跑 `wechatpro doctor` |
 | 调风控阈值 | [guard-rules.md](./guard-rules.md) |
+| 日报几点发、发给谁、某天没收到 | [digest.md](./digest.md) |
 | 数据放哪、怎么备份 | [deployment.md](./deployment.md) |

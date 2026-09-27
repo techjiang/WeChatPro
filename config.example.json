@@ -36,7 +36,12 @@
       "嗯嗯",
       "谢谢"
     ],
-    "hourlyBuckets": 24
+    "hourlyBuckets": 24,
+    "digestCron": "0 9 * * *",
+    "digestDays": 1,
+    "digestConversationId": "",
+    "digestIncludeEmpty": false,
+    "digestMaxConversations": 50
   },
   "guard": {
     "enabled": true,

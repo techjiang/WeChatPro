@@ -115,3 +115,121 @@ describe('HostGateway', () => {
     await expect(gateway.setBadge(3)).resolves.toBe(false);
   });
 });
+
+/**
+ * 通知去重窗口的运行时调整。
+ *
+ * 窗口来自配置，早期实现只在构造时读一次——「把窗口调小」这种调整
+ * 要重启插件才生效，属于典型的「改了没反应」。这里钉住运行时可对齐，
+ * 以及调整时窗口会被清空（新旧窗口混用会让新告警被旧记录压住）。
+ */
+describe('结构化宿主调用', () => {
+  it('未挂载宿主桥时所有能力都判定为不可用', () => {
+    const gateway = new HostGateway();
+    expect(gateway.host).toBe('none');
+    expect(gateway.capabilities()).toEqual([]);
+    expect(gateway.has('notify')).toBe(false);
+  });
+
+  it('空实现（声明了字段但不是函数）不算能力', () => {
+    const gateway = new HostGateway();
+    // 插件壳常见写法：把没实现的方法声明成字段。
+    gateway.attach({ host: 'shell', notify: undefined } as never);
+    expect(gateway.has('notify')).toBe(false);
+    expect(gateway.capabilities()).toEqual([]);
+  });
+
+  it('三态结果区分「能力缺失」与「调用失败」', async () => {
+    const gateway = new HostGateway();
+    gateway.attach({
+      host: 'shell',
+      openPanel: () => {
+        throw new Error('客户端拒绝');
+      },
+    });
+    // 缺失：ok=false 且无 error
+    const missing = await gateway.invoke('notify');
+    expect(missing.ok).toBe(false);
+    expect(missing.error).toBeUndefined();
+    // 失败：ok=false 且带 error
+    const failed = await gateway.invoke('openPanel');
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toBeInstanceOf(Error);
+  });
+
+  it('不返回值的能力仍然算成功（openPanel / setBadge）', async () => {
+    const gateway = new HostGateway();
+    let opened = 0;
+    gateway.attach({
+      host: 'shell',
+      openPanel: () => {
+        opened += 1;
+      },
+    });
+    await expect(gateway.openPanel('#/dashboard')).resolves.toBe(true);
+    expect(opened).toBe(1);
+  });
+
+  it('外链只放行 http(s)，file/javascript 一律拒绝', async () => {
+    const gateway = new HostGateway();
+    let opened: string | null = null;
+    gateway.attach({
+      host: 'shell',
+      openExternal: (url) => {
+        opened = url;
+        return true;
+      },
+    });
+    await expect(gateway.openExternal('file:///etc/passwd')).resolves.toBe(false);
+    await expect(gateway.openExternal('javascript:alert(1)')).resolves.toBe(false);
+    await expect(gateway.openExternal('https://docs.asoe.cn')).resolves.toBe(true);
+    expect(opened).toBe('https://docs.asoe.cn');
+  });
+
+  it('通知去重窗口可在运行时对齐，并对齐后清空旧记录', async () => {
+    const gateway = new HostGateway({ dedupeWindowMs: 60_000 });
+    let calls = 0;
+    gateway.attach({
+      host: 'shell',
+      notify: () => {
+        calls += 1;
+      },
+    });
+
+    await gateway.notify({ title: 't', body: 'b', dedupeKey: 'k' });
+    await gateway.notify({ title: 't', body: 'b', dedupeKey: 'k' });
+    expect(calls).toBe(1);
+
+    // 把窗口调到 0 附近：旧记录必须被清掉，否则下一条还是被压住。
+    gateway.setDedupeWindow(1);
+    expect(gateway.dedupeWindowMs).toBe(1);
+    await gateway.notify({ title: 't', body: 'b', dedupeKey: 'k' });
+    expect(calls).toBe(2);
+  });
+
+  it('非法的去重窗口被忽略，不会把窗口变成 0（等于永久静音）', () => {
+    const gateway = new HostGateway({ dedupeWindowMs: 1_000 });
+    gateway.setDedupeWindow(0);
+    gateway.setDedupeWindow(Number.NaN);
+    gateway.setDedupeWindow(-5);
+    expect(gateway.dedupeWindowMs).toBe(1_000);
+  });
+
+  it('替换宿主后去重窗口清空，新会话首批告警不会被静默吃掉', async () => {
+    const gateway = new HostGateway();
+    let calls = 0;
+    const notify = (): void => {
+      calls += 1;
+    };
+    gateway.attach({ host: 'a', notify });
+    await gateway.notify({ title: 't', body: 'b', dedupeKey: 'k' });
+    gateway.attach({ host: 'a', notify });
+    await gateway.notify({ title: 't', body: 'b', dedupeKey: 'k' });
+    // 同一个宿主标识：去重窗口保留（这是刻意的，避免同宿主重复告警刷屏）
+    expect(calls).toBe(1);
+
+    gateway.attach({ host: 'b', notify });
+    await gateway.notify({ title: 't', body: 'b', dedupeKey: 'k' });
+    expect(calls).toBe(2);
+  });
+});

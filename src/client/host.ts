@@ -47,6 +47,14 @@ export interface ClientHost {
   readonly transport: HostTransport;
   /** 适配器实例（惰性获取，永远指向引擎实际使用的那一个）。 */
   readonly adapter: ReturnType<typeof createHostAdapter>;
+  /**
+   * 造适配器时用的选项。
+   *
+   * 暴露它是为了让 `bootstrap()` 能把指纹交给注册表：同一个进程里既可能有
+   * 客户端形态的宿主、又有 `import` 用的默认宿主，二者 mapping/transport 不同，
+   * 注册表据指纹决定「复用还是另造」，避免导入的数据按另一套字段名解析。
+   */
+  readonly adapterOptions: Record<string, unknown>;
   host: string;
   panelRoute: string;
   /** 挂载/替换宿主桥。宿主启动完成、能力就绪后调用。 */
@@ -88,6 +96,7 @@ export function createClientHost(options: ClientHostOptions = {}): ClientHost {
 
   const clientHost: ClientHost = {
     gateway,
+    adapterOptions: adapterOptions as unknown as Record<string, unknown>,
     get transport() {
       return resolveAdapter().transport;
     },

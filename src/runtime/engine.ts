@@ -223,6 +223,8 @@ export class Engine {
       } else {
         this.bus.emit('raw', { ...payload, type: event.type });
       }
+      // 自检探针到此为止：计入 `received`（说明链路通）后即返回，
+      // **绝不落库**——否则每次健康检查都会给统计加一条假消息。
       return;
     }
 

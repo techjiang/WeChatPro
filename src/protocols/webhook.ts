@@ -220,35 +220,6 @@ export function buildWebhookAdapter(options: WebhookAdapterOptions): ProtocolAda
   };
 }
 
-/**
- * 按 mapping 把原始载荷映射成归一化字段。
- *
- * 时间戳与消息类型在这里就转换完毕，让下游拿到的一定是毫秒时间戳与合法 kind——
- * 归一化只做一次，避免每个模块各自兜底导致口径不一。
- */
-function mapPayload(
-  payload: unknown,
-  mapping: Record<string, string[]>,
-): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [field, paths] of Object.entries(mapping)) {
-    const value = pick(payload, ...paths);
-    if (value !== undefined) result[field] = value;
-  }
-  result.timestamp = toMillis(result.timestamp);
-  result.kind = coerceKind(result.kind);
-  result.mentions = Array.isArray(result.mentions)
-    ? result.mentions
-    : typeof result.mentions === 'string'
-      ? (result.mentions as string).split(',').filter(Boolean)
-      : [];
-  result.direction =
-    result.direction === true || result.direction === 1 || result.direction === 'send' || result.direction === 'out'
-      ? 'outbound'
-      : 'inbound';
-  result.raw = payload;
-  return result;
-}
 
 function readBody(req: IncomingMessage, limit: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -268,4 +239,65 @@ function readBody(req: IncomingMessage, limit: number): Promise<string> {
   });
 }
 
-export { coerceKind, mapPayload };
+
+/**
+ * 按 mapping 把原始载荷映射成归一化字段。
+ *
+ * 时间戳与消息类型在这里就转换完毕，让下游拿到的一定是毫秒时间戳与合法 kind——
+ * 归一化只做一次，避免每个模块各自兜底导致口径不一。
+ *
+ * `kind` 的收敛交给调用方传入的 `coerce`：协议层各有一套消息类型表
+ * （微信 `Type` 数字、企业微信字符串…），用同一套 `coerceKind` 会把对方的
+ * 取值全部落到 `unknown`，统计维度静默丢光。默认值仍是通用表，兼容既有调用。
+ */
+export function mapPayload(
+  payload: unknown,
+  mapping: Record<string, string[]>,
+  coerce: (raw: unknown) => string = coerceKind,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [field, paths] of Object.entries(mapping)) {
+    const value = pick(payload, ...paths);
+    if (value !== undefined) result[field] = value;
+  }
+  result.timestamp = toMillis(result.timestamp);
+  result.kind = coerce(result.kind);
+  result.mentions = toStringList(result.mentions);
+  // `IsSender` 在各协议里可能是布尔、0/1、`'1'`/`'0'` 字符串或 `'send'`。
+  // 微信 PC 端内存对象给的是数字，早期实现只认 `true`/`1`/`'send'`，
+  // 导致**自己发的消息被当成别人发的**（方向反了，出站不统计、@ 自己也会触发）。
+  result.direction = isOutbound(result.direction) ? 'outbound' : 'inbound';
+  result.raw = payload;
+  return result;
+}
+
+/**
+ * 把协议给的 @ 列表收敛成字符串数组。
+ *
+ * 兼容 `'a,b'` 逗号串、真正的数组，以及微信 `AtUserList` 里形如
+ * `wxid_a,wxid_b` 的写法；非字符串项转成字符串而不是丢弃——
+ * 数字 ID（企业微信 userid 可能是数字）丢掉后 @ 轰炸规则就永远数不出来。
+ */
+export function toStringList(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map((item) => String(item)).filter((item) => item.length > 0);
+  if (typeof raw === 'string') {
+    return raw
+      .split(/[,，;；\s]+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+  return [];
+}
+
+/** 出站方向判定：覆盖布尔、数字、数字字符串与常见枚举写法。 */
+export function isOutbound(raw: unknown): boolean {
+  if (raw === true) return true;
+  if (typeof raw === 'number') return raw === 1;
+  if (typeof raw === 'string') {
+    const value = raw.trim().toLowerCase();
+    return value === '1' || value === 'true' || value === 'yes' || value === 'send' || value === 'out' || value === 'outbound' || value === 'self';
+  }
+  return false;
+}
+
+export { coerceKind };

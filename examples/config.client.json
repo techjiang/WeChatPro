@@ -1,6 +1,9 @@
 {
   "logLevel": "info",
-  "storage": { "sqlitePath": "./data/client.db", "wal": true },
+  "storage": {
+    "sqlitePath": "./data/client.db",
+    "wal": true
+  },
   "adapters": [
     {
       "protocol": "host",
@@ -21,28 +24,131 @@
     "notifyDedupeMs": 60000,
     "badgeMax": 99
   },
-  "analytics": { "enabled": true, "stopWords": ["哈哈", "收到", "好的"], "hourlyBuckets": 24 },
+  "analytics": {
+    "enabled": true,
+    "stopWords": [
+      "哈哈",
+      "收到",
+      "好的"
+    ],
+    "hourlyBuckets": 24,
+    "digestCron": "0 9 * * *",
+    "digestDays": 1,
+    "digestConversationId": "",
+    "digestIncludeEmpty": false,
+    "digestMaxConversations": 20
+  },
   "guard": {
     "enabled": true,
     "alertThreshold": 30,
     "windowMs": 600000,
     "rules": [
-      { "id": "keyword-blocklist", "enabled": true, "action": "alert", "weight": 40, "description": "命中敏感词", "options": { "words": ["刷单", "博彩", "赌球"] } },
-      { "id": "contact-solicitation", "enabled": true, "action": "alert", "weight": 35, "description": "导流话术", "options": {} },
-      { "id": "link-flood", "enabled": true, "action": "warn", "weight": 25, "description": "短时间重复发链接", "options": { "windowMs": 300000, "threshold": 3 } },
-      { "id": "burst-spam", "enabled": true, "action": "mute-suggest", "weight": 20, "description": "刷屏", "options": { "windowMs": 60000, "threshold": 10 } }
+      {
+        "id": "keyword-blocklist",
+        "enabled": true,
+        "action": "alert",
+        "weight": 40,
+        "description": "命中敏感词",
+        "options": {
+          "words": [
+            "刷单",
+            "博彩",
+            "赌球"
+          ]
+        }
+      },
+      {
+        "id": "contact-solicitation",
+        "enabled": true,
+        "action": "alert",
+        "weight": 35,
+        "description": "导流话术",
+        "options": {}
+      },
+      {
+        "id": "link-flood",
+        "enabled": true,
+        "action": "warn",
+        "weight": 25,
+        "description": "短时间重复发链接",
+        "options": {
+          "windowMs": 300000,
+          "threshold": 3
+        }
+      },
+      {
+        "id": "burst-spam",
+        "enabled": true,
+        "action": "mute-suggest",
+        "weight": 20,
+        "description": "刷屏",
+        "options": {
+          "windowMs": 60000,
+          "threshold": 10
+        }
+      }
     ]
   },
-  "ai": { "enabled": false },
-  "manage": { "enabled": true, "retainMessagesPerConversation": 200000 },
-  "api": { "enabled": true, "host": "127.0.0.1", "port": 8787, "token": "" },
+  "ai": {
+    "enabled": false
+  },
+  "manage": {
+    "enabled": true,
+    "retainMessagesPerConversation": 200000
+  },
+  "api": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "token": ""
+  },
   "plugins": [
-    { "name": "command", "enabled": true, "options": { "prefix": "/", "aliases": ["机器人", "小助手", "科技酱"] } },
-    { "name": "analytics", "enabled": true, "options": {} },
-    { "name": "client", "enabled": true, "options": { "notify": true, "allowRemotePanel": true } },
-    { "name": "guard", "enabled": true, "options": { "autoActions": false } },
-    { "name": "ai", "enabled": true, "options": {} },
-    { "name": "manage", "enabled": true, "options": {} },
-    { "name": "rules-inspector", "enabled": true, "options": {} }
+    {
+      "name": "command",
+      "enabled": true,
+      "options": {
+        "prefix": "/",
+        "aliases": [
+          "机器人",
+          "小助手",
+          "科技酱"
+        ]
+      }
+    },
+    {
+      "name": "analytics",
+      "enabled": true,
+      "options": {}
+    },
+    {
+      "name": "client",
+      "enabled": true,
+      "options": {
+        "notify": true,
+        "allowRemotePanel": true
+      }
+    },
+    {
+      "name": "guard",
+      "enabled": true,
+      "options": {
+        "autoActions": false
+      }
+    },
+    {
+      "name": "ai",
+      "enabled": true,
+      "options": {}
+    },
+    {
+      "name": "manage",
+      "enabled": true,
+      "options": {}
+    },
+    {
+      "name": "rules-inspector",
+      "enabled": true,
+      "options": {}
+    }
   ]
 }

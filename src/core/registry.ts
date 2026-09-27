@@ -73,9 +73,24 @@ export function toMillis(value: unknown, fallback = Date.now()): number {
   return fallback;
 }
 
-/** 事件类型白名单 → 归一化类型。未知类型归为 `message` 以免丢数据。 */
-export function normalizeEventType(raw: string): RawEvent['type'] {
+/**
+ * 引擎认识的原始事件类型。
+ *
+ * 白名单式而非自由字符串：引擎对这几种有自己的处理（落库、转发、透传），
+ * 其余一律走 `raw` 透传，不猜语义。
+ */
+export type RawEventType = 'message' | 'message.revoked' | 'member.join' | 'member.leave' | 'selftest' | 'raw';
+
+/**
+ * 事件类型白名单 → 归一化类型。未知类型归为 `message` 以免丢数据。
+ *
+ * `selftest` 单独留一个类型：健康自检要探「宿主 → 引擎」这条链路，
+ * 但**不能**在探的时候写一条假消息进库（每次自检都让「昨天消息数 +1」）。
+ * 引擎对它的处理是：计入 `received`、发到总线，不落库。
+ */
+export function normalizeEventType(raw: string): RawEventType {
   const value = raw.toLowerCase();
+  if (value === 'selftest' || /^self[-_]?test$/.test(value)) return 'selftest';
   if (/revoke|recall|withdraw/.test(value)) return 'message.revoked';
   if (/join|invite|add.?member/.test(value)) return 'member.join';
   if (/leave|quit|kick|remove.?member/.test(value)) return 'member.leave';

@@ -144,6 +144,24 @@ export class HostGateway {
     this.#dedupe.clear();
   }
 
+  /**
+   * 调整通知去重窗口。
+   *
+   * 窗口在构造时定死，而它来自配置；配置改了却要重启插件才生效，
+   * 属于「改了没反应」的典型。这里允许运行时对齐，并且顺带清空窗口——
+   * 新旧窗口混用会让「刚调小窗口、上一条就压住了新告警」再次出现。
+   */
+  setDedupeWindow(windowMs: number): void {
+    if (!Number.isFinite(windowMs) || windowMs <= 0) return;
+    this.#dedupeWindowMs = windowMs;
+    this.#dedupe.clear();
+  }
+
+  /** 当前去重窗口（毫秒），排障与测试用。 */
+  get dedupeWindowMs(): number {
+    return this.#dedupeWindowMs;
+  }
+
   get host(): string {
     return this.#bridge.host;
   }

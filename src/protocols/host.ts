@@ -133,17 +133,46 @@ export class HostTransport {
   #server: Server | null = null;
   #received = 0;
   #dropped = 0;
+  #rejected = 0;
+  #lastRejected: string | null = null;
+  #onDrop: ((reason: string, payload: HostIngestPayload) => void) | null = null;
 
   constructor(mapping: Record<string, string[]>) {
     this.#mapping = mapping;
   }
 
+  /** 成功交给引擎的条数（不含被引擎去重/归一化失败的）。 */
   get received(): number {
     return this.#received;
   }
 
+  /** 被本层拒绝的条数：映射失败（缺会话/发送者）或引擎尚未就绪。 */
   get dropped(): number {
     return this.#dropped;
+  }
+
+  /** 载荷无法映射而被拒绝的条数。与 `dropped` 分开是因为「畸形数据」与「时序问题」的处理方式完全不同。 */
+  get rejected(): number {
+    return this.#rejected;
+  }
+
+  /** 上一条被拒绝的原因，`doctor` 与面板拿它给出一句话结论。 */
+  get lastRejected(): string | null {
+    return this.#lastRejected;
+  }
+
+  /** 注册丢弃回调：宿主插件壳据此提示「这条我没收下」。 */
+  onDrop(handler: ((reason: string, payload: HostIngestPayload) => void) | null): void {
+    this.#onDrop = handler;
+  }
+
+  #recordDrop(reason: IngestResult['reason'] & string, payload: HostIngestPayload): void {
+    this.#dropped += 1;
+    if (reason === 'unmapped') {
+      this.#rejected += 1;
+      this.#lastRejected = describeUnmapped(payload);
+    }
+    this.#onDrop?.(reason, payload);
   }
 
   bind(handler: RawEventHandler): void {
@@ -161,12 +190,12 @@ export class HostTransport {
   /** 不经过网络，直接投递宿主进程内的消息对象。方案 1 走这条。 */
   async inject(payload: HostIngestPayload, options: { eventType?: string } = {}): Promise<IngestResult> {
     if (!this.#handler) {
-      this.#dropped += 1;
+      this.#recordDrop('transport-off', payload);
       return { accepted: false, reason: 'transport-off' };
     }
     const mapped = this.map(payload);
     if (!mapped) {
-      this.#dropped += 1;
+      this.#recordDrop('unmapped', payload);
       return { accepted: false, reason: 'unmapped' };
     }
     this.#received += 1;
@@ -191,12 +220,29 @@ export class HostTransport {
     return { accepted, dropped };
   }
 
+  /**
+   * 自检注入：造一条**内置自检载荷**走完整管线，探测「宿主 → 引擎」这条链路是否真的通。
+   *
+   * 为什么需要它：宿主最常见的故障是注入了消息却看不到统计，
+   * 而「消息全丢」与「消息进来了但没有群」在面板上长得一模一样。
+   * 用一条带明确标识的自检消息探一遍，可以在面板里直接给出结论。
+   *
+   * 用 `eventType: 'selftest'` 让它**不落入消息表**（引擎只把 `message` 类型落库），
+   * 因此这条探针既不会污染统计，也能在事件总线上被观察到。
+   */
+  async probe(): Promise<IngestResult & { latencyMs: number }> {
+    const startedAt = Date.now();
+    const result = await this.inject(selfTestPayload(), { eventType: 'selftest' });
+    return { ...result, latencyMs: Math.max(0, Date.now() - startedAt) };
+  }
+
   /** 按映射把宿主字段转成引擎模型；缺少会话或发送者时返回 null（无法归属）。 */
   map(payload: HostIngestPayload): Record<string, unknown> | null {
     if (!payload || typeof payload !== 'object') return null;
-    const mapped = mapPayload(payload, this.#mapping);
+    // 消息类型的收敛必须由宿主协议自己决定：微信的 `Type` 是数字表，
+    // 通用 coerceKind 只认少数取值，用错会让所有图片/语音落到 unknown。
+    const mapped = mapPayload(payload, this.#mapping, coerceHostKind);
     if (mapped.conversationId === undefined || mapped.senderId === undefined) return null;
-    if (mapped.kind !== undefined) mapped.kind = coerceHostKind(mapped.kind);
     // 私聊场景下微信不给发送者，用会话 ID 兜底，避免整条消息被丢弃。
     if (mapped.senderName === undefined) mapped.senderName = String(mapped.senderId);
     if (mapped.conversationName === undefined) mapped.conversationName = String(mapped.conversationId);
@@ -332,6 +378,40 @@ export function createHostAdapter(
       }
     },
   } as ProtocolAdapter & { transport: HostTransport };
+}
+
+/** 自检载荷。用固定 ID 与固定会话，便于识别；不落消息表（事件类型不是 `message`）。 */
+export function selfTestPayload(overrides: HostIngestPayload = {}): HostIngestPayload {
+  return {
+    MsgSvrID: 'wechatpro-selftest',
+    StrTalker: 'wechatpro-selftest@chatroom',
+    RoomName: 'WeChatPro 自检',
+    StrSender: 'wxid_selftest',
+    SenderNick: '自检',
+    StrContent: '自检消息：这条不会计入统计',
+    Type: 1,
+    CreateTime: Math.floor(Date.now() / 1000),
+    ...overrides,
+  };
+}
+
+/**
+ * 把「无法映射」翻译成一句人能直接照着改的结论。
+ *
+ * 宿主注入失败最常见的两个原因是字段名对不上（换微信版本）与会话为空，
+ * 但它们都表现为 `reason: "unmapped"`，光看状态码无从下手。
+ */
+export function describeUnmapped(payload: unknown): string {
+  const keys = payload && typeof payload === 'object' ? Object.keys(payload as object) : [];
+  const preview = keys.slice(0, 8).join('、');
+  const hasTalker = /StrTalker|TalkerId|conversationId|roomId|ChatId/i.test(keys.join(','));
+  const hasSender = /StrSender|Sender|senderId|fromUser|FromUserName/i.test(keys.join(','));
+  if (!hasTalker && !hasSender) {
+    return `载荷里找不到会话字段（StrTalker/conversationId）与发送者字段（StrSender/senderId），实际字段：${preview || '（空对象）'}`;
+  }
+  if (!hasTalker) return `载荷缺会话字段，实际字段：${preview}`;
+  if (!hasSender) return `载荷缺发送者字段，实际字段：${preview}`;
+  return `会话或发送者取值为空，实际字段：${preview}`;
 }
 
 /** 从宿主事件名/载荷推断是否需要当作成员事件处理。 */

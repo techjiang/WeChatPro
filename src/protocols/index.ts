@@ -18,7 +18,7 @@ import type { HostGateway } from '../core/host-bridge.js';
  * 对接私有协议时按 `ProtocolAdapter` 实现并 `registerAdapter`，不修改本文件。
  */
 
-export { buildMockAdapter, buildWebhookAdapter, mapPayload, coerceKind } from './webhook.js';
+export { buildMockAdapter, buildWebhookAdapter, mapPayload, coerceKind, toStringList, isOutbound } from './webhook.js';
 export type { MockAdapterOptions, WebhookAdapterOptions } from './webhook.js';
 export {
   createHostAdapter,
@@ -28,6 +28,8 @@ export {
   coerceHostKind,
   parseChatExport,
   dumpPayload,
+  describeUnmapped,
+  selfTestPayload,
 } from './host.js';
 export type { HostAdapterOptions, HostIngestPayload, IngestResult } from './host.js';
 
@@ -41,8 +43,20 @@ export interface RegisterBuiltinOptions {
    *
    * 每次 `bootstrap()` 都会传入新的提供方，`host` 分发器在造适配器时读取它——
    * 这是「一个进程能安全地起多次客户端形态」的关键。
+   *
+   * 提供方应当**每次返回同一个实例**（`createClientHost()` 用 getter 保证了这点）。
+   * 若它每次返回新对象，分发器会拒绝复用旧副本并重新构造——代价是旧实例上
+   * 挂着的订阅者会变成孤儿（正是「日志正常、消息全丢」那个坑）。
    */
   hostProvider?: () => ReturnType<typeof createHostAdapter>;
+  /**
+   * 宿主提供方那侧实例的构造选项。
+   *
+   * 只在「选项一致」时才复用同一个适配器实例：同一个进程里可能既有客户端形态
+   * 的宿主、又有 `import` 用的默认宿主，二者 mapping / transport 不同。
+   * 不传时按「总是可复用」处理（宿主形态的常规情况）。
+   */
+  hostProviderOptions?: Record<string, unknown>;
   /**
    * 宿主适配器工厂（旧入口，保留兼容）。
    *
@@ -71,6 +85,9 @@ let hostProvider: (() => ReturnType<typeof createHostAdapter>) | null = null;
 /** 旧入口 `hostFactory` 的留存位；同样每次 `registerBuiltinAdapters()` 都会被刷新。 */
 let legacyHostFactory: AdapterFactory | null = null;
 
+/** 宿主提供方那侧实例的选项指纹；未声明时按「与请求一致」处理，保持向后兼容。 */
+let providerFingerprint: string | null = null;
+
 /**
  * 注册（或替换）客户端宿主提供方。
  *
@@ -81,8 +98,10 @@ export function setHostProvider(
   provider: (() => ReturnType<typeof createHostAdapter>) | null,
   gateway?: HostGateway,
   bridge?: import('../core/host-bridge.js').HostBridge,
+  providerOptions?: Record<string, unknown>,
 ): void {
   hostProvider = provider;
+  providerFingerprint = providerOptions ? fingerprint(providerOptions) : null;
   if (gateway) {
     if (bridge) gateway.attach(bridge);
     setHostGateway(gateway);
@@ -129,10 +148,45 @@ export function registerBuiltinAdapters(options: RegisterBuiltinOptions = {}): v
     // 这样「先注册、后 bootstrap」与「多次 bootstrap」都能指向正确的宿主。
     const factory: AdapterFactory = async (raw, deps) => {
       const active = hostProvider?.();
-      if (active) return active;
-      if (legacyHostFactory) return legacyHostFactory(raw, deps);
-      return createHostAdapter(raw as HostAdapterOptions, hostGateway, options.hostBridge);
+      // 复用同一个实例的前提是**选项一致**：同一个进程里可能既有客户端形态、
+      // 又有 `import` 用的默认 host 适配器，它们的 mapping / transport 不同。
+      // 无条件复用会让后者拿到前者的 mapping，导入的数据按另一套字段名解析，
+      // 表现为「导入 0 条」而日志毫无异常。
+      if (active && matchesOptions(active, raw)) return active;
+      if (legacyHostFactory) {
+        const legacy = await legacyHostFactory(raw, deps);
+        const legacyTransport = (legacy as { transport?: unknown }).transport;
+        if (active && legacyTransport !== undefined && legacyTransport === active.transport) return active;
+        return legacy;
+      }
+      const created = createHostAdapter(raw as HostAdapterOptions, hostGateway, options.hostBridge);
+      adapterOptions.set(created, fingerprint(raw));
+      return created;
     };
     registerAdapter('host', factory);
   }
 }
+
+/** 宿主适配器当时的构造选项（用于判断能否复用实例）。 */
+const adapterOptions = new WeakMap<object, string>();
+
+/** 选项指纹：只比对会改变行为的字段，宿主名与 mapping 不同就不能复用。 */
+function fingerprint(options: Record<string, unknown>): string {
+  const relevant = ['host', 'transport', 'httpPort', 'httpHost', 'httpPath', 'outbound', 'outboundUrl', 'dumpDir'];
+  const picked: Record<string, unknown> = {};
+  for (const key of relevant) if (options[key] !== undefined) picked[key] = options[key];
+  if (options.mapping && typeof options.mapping === 'object') picked.mapping = options.mapping;
+  return JSON.stringify(picked);
+}
+
+export function matchesOptions(
+  adapter: ReturnType<typeof createHostAdapter>,
+  raw: Record<string, unknown>,
+): boolean {
+  const declared = adapterOptions.get(adapter) ?? providerFingerprint;
+  // 提供方没声明选项时按一致处理：宿主形态的默认选项就是引擎注入的那一套，
+  // 过于保守会白白丢掉「复用 ⇒ 订阅者不孤儿」这个最重要的性质。
+  return declared === null || declared === undefined ? true : declared === fingerprint(raw);
+}
+
+

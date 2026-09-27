@@ -50,6 +50,8 @@ export function matchClientCommand(text: string): 'panel' | 'export' | null {
 export function createClientPlugin(): Plugin {
   let host: ClientHost | null = null;
   let unread = 0;
+  /** 插件私有配置。`setup()` 时确定，订阅与动作都读它，保证只有一份来源。 */
+  let options: ClientPluginOptions = {};
 
   /** 取宿主句柄：优先用引擎上下文里注入的（客户端形态），否则插件独立运行。 */
   function resolve(context: EngineContext): ClientHost | null {
@@ -62,7 +64,7 @@ export function createClientPlugin(): Plugin {
       description: 'PC 客户端集成：原生通知、入口角标、面板唤起、群内指令',
     },
     setup(context: EngineContext, raw: Record<string, unknown>): void {
-      const options = raw as ClientPluginOptions;
+      options = raw as ClientPluginOptions;
       const injected = (context as EngineContext & { client?: ClientHost }).client;
       if (injected) host = injected;
       const onAlert = options.notify ?? context.config.client.notifyOnAlert;
@@ -72,12 +74,16 @@ export function createClientPlugin(): Plugin {
       );
     },
     subscriptions(context) {
-      const options = context.config.plugins.find((p) => p.name === 'client')?.options as
-        | ClientPluginOptions
-        | undefined;
-      const notifyEnabled = options?.notify ?? context.config.client.notifyOnAlert;
-      const dedupeMs = options?.notifyDedupeMs ?? context.config.client.notifyDedupeMs;
-      const badgeMax = options?.badgeMax ?? context.config.client.badgeMax;
+      // 选项来源统一走 `setup()` 收到的那一份（引擎已按 `plugins[].options` 解析）。
+      // 早期实现这里重新去 `config.plugins` 里捞一遍，于是 `extraPlugins` 注入的
+      // 插件、或测试直接 new 出来的插件，读到的永远是自己那份旧配置——
+      // 「按配置关掉了通知，还是弹」这类问题就出在这儿，而且只在非 bootstrap 路径上出现。
+      const notifyEnabled = options.notify ?? context.config.client.notifyOnAlert;
+      // 去重窗口单位是毫秒，而 `HostGateway` 的窗口在构造时固定。
+      // 这里显式对齐一次：配置改小窗口后立即生效，不必重启插件。
+      const dedupeMs = options.notifyDedupeMs ?? context.config.client.notifyDedupeMs;
+      client_applyDedupeWindow(resolve(context), dedupeMs);
+      const badgeMax = options.badgeMax ?? context.config.client.badgeMax;
 
       return [
         {
@@ -98,7 +104,6 @@ export function createClientPlugin(): Plugin {
               route: '#/guard',
               dedupeKey: `${alert.conversationId}:${alert.memberId}:${alert.ruleId}`,
             });
-            void dedupeMs;
           },
         },
         {
@@ -124,7 +129,7 @@ export function createClientPlugin(): Plugin {
             const action = matchClientCommand(text);
             // 群内 `/面板`：把客户端插件面板直接拉到前台，比让人自己找入口快。
             if (action === 'panel') {
-              if (!(options?.allowRemotePanel ?? true)) return;
+              if (!(options.allowRemotePanel ?? true)) return;
               void resolve(context)
                 ?.focus('#/dashboard')
                 .then((result) => {
@@ -177,4 +182,15 @@ export function createClientPlugin(): Plugin {
 /** 供面板与 CLI 复用：读取未读角标文本。 */
 export function badgeText(count: number, max = 99): string {
   return count > max ? `${max}+` : String(count);
+}
+
+/**
+ * 对齐通知去重窗口。
+ *
+ * `HostGateway` 的窗口在构造时定死，配置改了不会自动跟随；
+ * 这里在订阅时同步一次，让「调小通知去重窗口」这类调整无需重启插件即可生效。
+ */
+function client_applyDedupeWindow(host: ClientHost | null, windowMs: number): void {
+  if (!host || !Number.isFinite(windowMs) || windowMs <= 0) return;
+  host.gateway.setDedupeWindow(windowMs);
 }

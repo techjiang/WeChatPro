@@ -1,6 +1,7 @@
 import { Engine } from './engine.js';
 import { parseConfig, applyEnvOverrides, ConfigError, type AppConfig } from '../core/config.js';
 import { registerBuiltinAdapters } from '../protocols/index.js';
+import { describeUnmapped } from '../protocols/host.js';
 import { createAnalyticsPlugin } from '../plugins/analytics.js';
 import { createAiPlugin } from '../plugins/ai.js';
 import { createClientPlugin } from '../plugins/client.js';
@@ -56,6 +57,14 @@ export interface BootstrapResult {
   stop(): Promise<void>;
 }
 
+/**
+ * 宿主注入被拒的按原因计数。
+ *
+ * 这类问题在客户端插件里最难查：宿主以为发出去了，面板却什么都没变。
+ * 计数挂在模块级（同一个进程只跑一份插件），`client` 命令与自检命令直接读它。
+ */
+const dropCounters = new Map<string, number>();
+
 export const builtinPlugins: Plugin[] = [
   createAnalyticsPlugin(),
   createAiPlugin(),
@@ -97,8 +106,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // `hostProvider` 每次 bootstrap 都重新传入：注册表是全局的，而宿主实例是每份插件一份。
   // 只在首次生效的话，第二个客户端形态会拿到第一个宿主的适配器，注入静默失效。
+  //
+  // 第三个参数（选项指纹）决定「什么时候允许复用同一个实例」：同一个进程里
+  // 客户端形态的宿主与 `import` 用的默认宿主选项不同（mapping / transport），
+  // 无条件复用会让导入的数据按另一套字段名解析，表现为「导入 0 条」而日志正常。
   registerBuiltinAdapters(
-    host ? { hostGateway: host.gateway, hostProvider: () => host.adapter } : {},
+    host
+      ? { hostGateway: host.gateway, hostProvider: () => host.adapter, hostProviderOptions: host.adapterOptions }
+      : {},
   );
   const client = host;
 
@@ -124,6 +139,19 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   if (config.api.enabled) {
     assertSafeBinding(config);
     server = buildServer({ engine, config, logger: engine.logger, ai, client });
+  }
+
+  // 宿主降级金丝雀：把适配器层的丢弃事件转成 bus 上的 `engine.warn`，
+  // 让「注入了但没进库」这件事在面板与日志里都看得见（而不是静默消失）。
+  const hostAdapter = client?.adapter;
+  if (hostAdapter) {
+    hostAdapter.transport.onDrop((reason, payload) => {
+      dropCounters.set(reason, (dropCounters.get(reason) ?? 0) + 1);
+      engine.logger.warn(
+        { reason, dropped: hostAdapter.transport.dropped, rejected: hostAdapter.transport.rejected, payload },
+        reason === 'unmapped' ? `宿主载荷无法映射：${describeUnmapped(payload)}` : '宿主注入被拒绝（引擎未就绪）',
+      );
+    });
   }
 
   return {
@@ -154,3 +182,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 }
 
 export { ConfigError };
+
+/** 读取当前进程里宿主注入被拒的计数（原因 -> 次数）。 */
+export function hostDropStats(): Record<string, number> {
+  return Object.fromEntries(dropCounters);
+}

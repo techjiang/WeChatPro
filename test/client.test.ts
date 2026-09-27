@@ -531,11 +531,36 @@ describe('内置面板', () => {
     expect(width).toBe(256);
   });
 
-  it('九个视图全部在面板里注册', () => {
+  it('十个视图全部在面板里注册', () => {
     const html = renderPanel();
-    for (const view of ['dashboard', 'activity', 'heatmap', 'members', 'guard', 'knowledge', 'ai', 'rules', 'about']) {
+    for (const view of [
+      'dashboard',
+      'activity',
+      'heatmap',
+      'members',
+      'guard',
+      'knowledge',
+      'ai',
+      'rules',
+      'health',
+      'about',
+    ]) {
       expect(html).toContain(`'${view}'`);
     }
+  });
+
+  it('运行自检视图把探测结论与「不污染统计」的保证一起呈现', () => {
+    const html = renderPanel();
+    // 面板上的自检读的必须是深度接口，否则只是换个地方显示「引擎还活着」。
+    expect(html).toContain('/api/health/deep');
+    expect(html).toContain('selftest');
+  });
+
+  it('轮询刷新侧栏与角标，而不是每次把未读清零', () => {
+    const html = renderPanel();
+    // 早期实现每 20 秒就把 guardUnread 清零，角标基本没生效过。
+    expect(html).not.toContain('guardUnread = health.stats.duplicates > 0 ? 0 : guardUnread');
+    expect(html).toContain('startWatch');
   });
 
   it('脚本可控：不出现未转义的模板拼接（XSS 面收敛在 esc 上）', () => {

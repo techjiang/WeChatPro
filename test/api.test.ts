@@ -433,3 +433,88 @@ describe('客户端形态 API', () => {
     }
   });
 });
+
+/**
+ * 深度健康检查。
+ *
+ * 浅层 `/health` 只说「引擎还活着」，但宿主插件最常见的故障是
+ * 「注入了消息、面板却没变化」——「没投进来」「投进来但字段名对不上」
+ * 「投进来也入库了只是没选群」在浅层接口上长得一模一样。
+ * 这组用例钉住「结论是否可操作」而不只是「接口返回 200」。
+ */
+describe('深度健康检查', () => {
+  let engine: Engine;
+  let app: FastifyInstance;
+  let client: ReturnType<typeof createClientHost>;
+
+  beforeEach(async () => {
+    client = createClientHost({ host: 'wechat-pc' });
+    const config = testConfig({
+      api: { enabled: true, port: 0 },
+      adapters: [{ protocol: 'host', options: { transport: 'none' } }],
+      client: { enabled: true },
+    });
+    engine = createTestEngine(config);
+    await engine.start();
+    client.transport.attachSink((event) => engine.ingestRaw(event));
+    app = buildServer({ engine, config, logger: engine.logger, client });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await engine.stop();
+  });
+
+  it('链路通畅时给出「一切正常」的结论', async () => {
+    await client.ingest({
+      MsgSvrID: 'h1',
+      StrTalker: 'g@chatroom',
+      RoomName: '群',
+      StrSender: 'u1',
+      SenderNick: '甲',
+      StrContent: '你好',
+      Type: 1,
+      CreateTime: 1_790_000_000,
+    });
+    const body = (await app.inject({ method: 'GET', url: '/api/health/deep' })).json();
+    expect(body.ok).toBe(true);
+    expect(body.verdict).toContain('一切正常');
+    expect(body.data.totalMessages).toBe(1);
+    // 1 条真实消息 + 1 条自检探针（探针只计数不落库）
+    expect(body.transport.received).toBe(2);
+  });
+
+  it('探针不会被写进消息表（自检不污染统计）', async () => {
+    const before = engine.store.listConversations().length;
+    const body = (await app.inject({ method: 'GET', url: '/api/health/deep' })).json();
+    expect(body.probe.accepted).toBe(true);
+    expect(engine.store.listConversations().length).toBe(before);
+    // 引擎确实看到了事件（received 增加），只是不落库。
+    expect(engine.stats.received).toBeGreaterThan(0);
+  });
+
+  it('有载荷无法映射时，结论直接指出要核对字段名', async () => {
+    await client.ingest({ Foo: 'bar' });
+    const body = (await app.inject({ method: 'GET', url: '/api/health/deep' })).json();
+    expect(body.verdict).toContain('无法映射');
+    expect(body.transport.rejected).toBe(1);
+    expect(body.transport.lastRejected).toBeTruthy();
+  });
+
+  it('链路通但还没数据时，结论提示「让客户端投一条真实消息」', async () => {
+    const body = (await app.inject({ method: 'GET', url: '/api/health/deep' })).json();
+    expect(body.ok).toBe(true);
+    expect(body.verdict).toContain('还没有消息入库');
+  });
+
+  it('非客户端形态下明确说明宿主动作不适用，而不是报错', async () => {
+    const plainEngine = createTestEngine(testConfig({ api: { enabled: true, port: 0 } }));
+    const plain = buildServer({ engine: plainEngine, config: plainEngine.config, logger: plainEngine.logger });
+    await plain.ready();
+    const response = await plain.inject({ method: 'GET', url: '/api/health/deep' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().verdict).toContain('不是客户端形态');
+    await plain.close();
+  });
+});

@@ -211,6 +211,7 @@ var VIEWS = [
   { id:'knowledge', label:'📚 群知识库' },
   { id:'ai',        label:'🧠 AI 助手' },
   { id:'rules',     label:'⚙️ 规则配置' },
+  { id:'health',    label:'🩺 运行自检' },
   { id:'about',     label:'ℹ️ 关于' }
 ];
 
@@ -260,7 +261,7 @@ function convQuery(extra) {
 
 /* ── 渲染 ──────────────────────────────────────────────────── */
 /** 这些视图不依赖「选中的群」，没有数据也能正常打开。 */
-var GLOBAL_VIEWS = ['about', 'rules'];
+var GLOBAL_VIEWS = ['about', 'rules', 'health'];
 
 function render() {
   var main = document.getElementById('main');
@@ -637,6 +638,55 @@ RENDERERS.rules = function () {
 
 var BUILTIN_RULES = ['敏感词命中', '链接刷屏', '刷屏', '重复内容', '静默时段', '@ 轰炸', '媒体刷屏', '导流话术'];
 
+/**
+ * 运行自检。
+ *
+ * 这个视图存在的理由：客户端插件的故障几乎都表现为「面板里什么都没有」，
+ * 而「宿主没投进来」「投进来但字段名对不上」「投进来也入库了只是没选群」
+ * 在界面上长得一模一样。把注入链路实测一遍并给出**一句结论**，
+ * 比让用户去读日志快得多。
+ */
+RENDERERS.health = function () {
+  return api('/api/health/deep').then(function (res) {
+    var html = header('运行自检', '注入链路 / 宿主能力 / 数据落地一次看全');
+    html += '<div class="panel"><h2>结论</h2><p class="' + (res.ok ? 'ok' : 'err') + '" style="margin:0 0 10px">' +
+      esc(res.verdict) + '</p><div class="row"><button class="act" id="reprobe">重新探测</button></div></div>';
+
+    html += '<div class="panel"><h2>注入探测</h2><div class="cards">' +
+      card('结果', res.probe.accepted ? '通过' : '失败', res.probe.accepted) +
+      card('耗时', res.probe.latencyMs + ' ms') +
+      card('原因', res.probe.reason || '-') +
+      '</div><p class="muted" style="margin-top:8px">探针消息带 <code>eventType: selftest</code>，' +
+      '引擎不会把它写进消息表，因此不会污染统计。</p></div>';
+
+    if (res.transport) {
+      html += '<div class="panel"><h2>适配器计数</h2><div class="cards">' +
+        card('已订阅', res.transport.bound ? '是' : '否', res.transport.bound) +
+        card('已接收', n(res.transport.received)) +
+        card('已丢弃', n(res.transport.dropped)) +
+        card('无法映射', n(res.transport.rejected)) +
+        '</div>' + (res.transport.lastRejected
+          ? '<p class="err" style="margin-top:8px">最近一次无法映射：' + esc(res.transport.lastRejected) + '</p>'
+          : '') + '</div>';
+    }
+
+    html += '<div class="panel"><h2>数据</h2><div class="kv">' +
+      kv('会话数', n(res.data.conversations)) + kv('累计消息', n(res.data.totalMessages)) +
+      kv('累计接收', n(res.engine.received)) + kv('去重丢弃', n(res.engine.duplicates)) +
+      kv('处理失败', n(res.engine.failed)) +
+      kv('适配器', (res.engine.adapters || []).join('、') || '-') +
+      '</div></div>';
+
+    html += '<div class="panel"><h2>宿主能力</h2>' + (res.host.capabilities.length
+      ? '<div class="tags">' + res.host.capabilities.map(function (c) { return '<span class="tag">' + esc(c) + '</span>'; }).join('') + '</div>'
+      : '<p class="muted">当前未接入客户端宿主（离线预览或纯 HTTP 形态）。这属于合法状态：' +
+        '统计、风控、面板都可正常工作，只是没有原生通知/角标/文件对话框。</p>') + '</div>';
+
+    document.getElementById('main').innerHTML = html;
+    document.getElementById('reprobe').onclick = function () { render(); toast('已重新探测'); };
+  });
+};
+
 RENDERERS.about = function () {
   var html = header('关于', BRAND_NAME + ' · ' + BRAND_TAGLINE);
   html += '<div class="panel"><h2>项目</h2><div class="kv">' +
@@ -697,18 +747,45 @@ function boot() {
     return loadConversations();
   }).then(function () {
     render();
-    /* 轮询而非 WebSocket：客户端 WebView 对长连接支持不稳定，且这个面板是「看一眼」的用法。 */
-    setInterval(function () {
-      api('/health').then(function (health) {
-        // 新增消息时刷新角标，让宿主入口能提示「有新事件」。
-        guardUnread = health.stats.duplicates > 0 ? 0 : guardUnread;
-        if (HOST && typeof HOST.setBadge === 'function' && health.stats.failed > 0) HOST.setBadge(health.stats.failed);
-      }).catch(function () {});
-    }, 20000);
+    startWatch();
   }).catch(function (error) {
     document.getElementById('health').innerHTML = '<span class="err">连接失败：' + esc(error.message) + '</span>';
     render();
   });
+}
+
+/**
+ * 轮询健康数据。
+ *
+ * 用轮询而不是 WebSocket：客户端 WebView 对长连接支持不稳定，
+ * 而且这个面板本来就是「看一眼」的用法。
+ *
+ * 这里做两件早期版本做错的事：
+ *  1. 发现异常要看得见：以前只要有一条重复消息就把未读角标清零，角标因此基本没生效过。
+ *  2. 侧栏的接收数要刷新：以前只有首屏读一次，用户盯着面板看的时候
+ *     数字永远不动，很容易误以为「消息没进来」。
+ */
+var watchTimer = null;
+function startWatch() {
+  if (watchTimer) return;
+  watchTimer = setInterval(function () {
+    api('/health').then(function (health) {
+      var el = document.getElementById('health');
+      if (el) {
+        el.innerHTML = '已接入 <b>' + health.conversations + '</b> 个会话 · 接收 <b>' +
+          n(health.stats.accepted) + '</b> 条 · AI ' + (health.aiEnabled ? '已启用' : '未启用');
+      }
+      // 处理失败数作为「有东西不对劲」的信号亮到入口角标上，
+      // 用户不必主动翻日志就能察觉异常。
+      if (HOST && typeof HOST.setBadge === 'function') {
+        HOST.setBadge(Math.min(health.stats.failed || 0, 99));
+      }
+    }).catch(function () {
+      var el = document.getElementById('health');
+      if (el) el.innerHTML = '<span class="err">引擎已断开，正在重试…</span>';
+    });
+  }, 20000);
+  if (watchTimer && typeof watchTimer.unref === 'function') watchTimer.unref();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
