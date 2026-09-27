@@ -25,7 +25,13 @@ export const BRAND = {
   license: 'MIT',
 } as const;
 
-/** 候选路径：源码目录与构建产物目录的层级不同，两处都试。 */
+/**
+ * 候选路径：源码目录与构建产物目录的层级不同，两处都试。
+ *
+ * 用 `logo-256.png`（徽标版）而不是 `logo-lockup-*`：面板顶栏是 24~32px 的小位图，
+ * lockup 里的包名文字在这个尺寸下只会糊成一团。需要完整组合（README、商店页）
+ * 的地方直接引用 `brand/logo-lockup-512.png`。
+ */
 const CANDIDATES = [
   resolve(HERE, '../../brand/logo-256.png'),
   resolve(HERE, '../../../brand/logo-256.png'),

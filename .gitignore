@@ -7,3 +7,7 @@ data/
 .env
 .DS_Store
 *.tsbuildinfo
+
+# 品牌资源生成时的中间产物（见 brand/README.md）
+/.pw
+/.tmp

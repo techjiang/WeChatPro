@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="brand/logo-256.png" width="128" alt="WeChatPro Logo">
+  <img src="brand/logo-lockup-512.png" width="160" alt="WeChatPro Logo">
   <h1>WeChatPro</h1>
   <p><b>微信 PC 客户端插件</b> · 群聊统计 · 自动化检测 · 群聊信息管理 · AI 助手</p>
   <p>装在微信里，打开面板即用 —— 不用另起服务，不用把聊天记录搬到别处</p>
@@ -282,7 +282,7 @@ node dist/cli.js ui --out /tmp/panel.html   # 导出后用浏览器打开
 重新生成品牌图标（可选，需要 sharp）：
 
 ```bash
-npm i -D sharp && npx tsx scripts/brand-assets.ts brand/logo.png
+npm i -D sharp && npx tsx scripts/brand-assets.ts brand/logo-source.png
 ```
 
 ## 文档

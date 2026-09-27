@@ -33,7 +33,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist coverage",
-    "brand:assets": "tsx scripts/brand-assets.ts brand/logo.png",
+    "brand:assets": "tsx scripts/brand-assets.ts brand/logo-source.png",
     "verify:panel": "node scripts/verify-panel.mjs /tmp/panel.html",
     "verify:client": "node scripts/smoke-client.mjs",
     "ci": "npm run typecheck && npm test && npm run build"
@@ -48,6 +48,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.6.3",
+    "sharp": "^0.35.4",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2"

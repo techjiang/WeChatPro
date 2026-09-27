@@ -516,6 +516,21 @@ describe('内置面板', () => {
     expect(html).toContain(BRAND.qqGroups[0] as string);
   });
 
+  it('面板用的是「徽标」而不是「徽标 + 文字」，且确实是登录的那种方形裁剪', () => {
+    const html = renderPanel();
+    const match = html.match(/data:image\/png;base64,([A-Za-z0-9+/=]+)/);
+    // 品牌资源缺失时面板降级为纯文字标题，这一条对资源本身不成立，跳过。
+    if (!match) return;
+    const png = Buffer.from(match[1] as string, 'base64');
+    // PNG IHDR：宽高各 4 字节（大端），位于固定偏移。
+    expect(png.subarray(1, 4).toString()).toBe('PNG');
+    const width = png.readUInt32BE(16);
+    const height = png.readUInt32BE(20);
+    // 必须是正方形：lockup（徽标 + 包名文字）是竖版的，混进面板顶栏会被压扁。
+    expect(width).toBe(height);
+    expect(width).toBe(256);
+  });
+
   it('九个视图全部在面板里注册', () => {
     const html = renderPanel();
     for (const view of ['dashboard', 'activity', 'heatmap', 'members', 'guard', 'knowledge', 'ai', 'rules', 'about']) {
